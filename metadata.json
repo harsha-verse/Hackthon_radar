@@ -1,0 +1,6 @@
+{
+  "name": "Hackathon Radar — Karnataka Student Hackathon Discovery",
+  "description": "Hyperlocal hackathon discovery, eligibility matching, registration deadline tracking, and academic calendar conflict planning for college students across Bengaluru, Mysuru, Mandya, and Karnataka.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
