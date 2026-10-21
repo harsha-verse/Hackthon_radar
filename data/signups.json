@@ -1,5 +1,12 @@
 [
   {
+    "id": "stu-1792610045093",
+    "name": "Harsha Test",
+    "phone": "9988776655",
+    "year_of_study": "3rd Year",
+    "created_at": "2026-10-21T19:14:05.093Z"
+  },
+  {
     "id": "stu-1792577323571",
     "name": "Harsha V",
     "phone": "9876543210",

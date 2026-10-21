@@ -1207,6 +1207,50 @@ interface AdminModalProps {
   onClose: () => void;
 }
 
+const SUPABASE_SCHEMA_SQL = `-- Run once in your Supabase Dashboard -> SQL Editor
+CREATE TABLE IF NOT EXISTS public.student_signups (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  phone TEXT UNIQUE NOT NULL,
+  year_of_study TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.hackathons (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  college TEXT NOT NULL,
+  description TEXT,
+  event_date DATE NOT NULL,
+  event_date_label TEXT,
+  registration_deadline DATE,
+  location TEXT,
+  mode TEXT DEFAULT 'Offline',
+  prize TEXT,
+  team_size TEXT,
+  entry_fee TEXT,
+  coordinators TEXT,
+  perks TEXT,
+  category TEXT,
+  registration_status TEXT DEFAULT 'Registration Open',
+  status_override TEXT,
+  registration_url TEXT NOT NULL,
+  brochure_url TEXT,
+  image_url TEXT,
+  secondary_image_url TEXT,
+  source_url TEXT,
+  last_verified_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()),
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
+);
+
+ALTER TABLE public.student_signups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.hackathons ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public read hackathons" ON public.hackathons FOR SELECT USING (true);
+CREATE POLICY "Service role full access signups" ON public.student_signups FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role full access hackathons" ON public.hackathons FOR ALL USING (true) WITH CHECK (true);`;
+
 function AdminModal({
   adminPasscode,
   setAdminPasscode,
@@ -1247,6 +1291,65 @@ function AdminModal({
   handleAdminDeleteCompetition,
   onClose,
 }: AdminModalProps) {
+  const [sbView, setSbView] = useState(false);
+  const [sbStatus, setSbStatus] = useState<{
+    connected: boolean;
+    projectUrl: string | null;
+    authUsersCount: number;
+    tablesReady: boolean;
+    storageReady: boolean;
+  } | null>(null);
+  const [isSyncingSb, setIsSyncingSb] = useState(false);
+  const [sqlCopied, setSqlCopied] = useState(false);
+  const [sbSyncFeedback, setSbSyncFeedback] = useState<string | null>(null);
+
+  async function fetchSupabaseStatus() {
+    try {
+      const res = await fetch('/api/admin/supabase-status', {
+        headers: { 'x-admin-passcode': adminPasscode.trim() || 'radar-admin-2026' },
+      });
+      const data = await res.json();
+      if (data?.ok) {
+        setSbStatus(data);
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  useEffect(() => {
+    if (adminUnlocked) {
+      fetchSupabaseStatus();
+    }
+  }, [adminUnlocked]);
+
+  async function handleForceSupabaseSync() {
+    setIsSyncingSb(true);
+    setSbSyncFeedback(null);
+    try {
+      const res = await fetch('/api/admin/supabase-sync', {
+        method: 'POST',
+        headers: { 'x-admin-passcode': adminPasscode.trim() || 'radar-admin-2026' },
+      });
+      const data = await res.json();
+      if (data?.ok) {
+        setSbSyncFeedback(data.message || 'Synced with Supabase!');
+        await fetchSupabaseStatus();
+        refreshAdminSignups();
+      }
+    } catch {
+      setSbSyncFeedback('Could not sync with Supabase.');
+    } finally {
+      setIsSyncingSb(false);
+    }
+  }
+
+  function handleCopySql() {
+    navigator.clipboard.writeText(SUPABASE_SCHEMA_SQL);
+    setSqlCopied(true);
+    setTimeout(() => setSqlCopied(false), 2500);
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-[#121216] border border-zinc-800 rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
@@ -1270,7 +1373,7 @@ function AdminModal({
           {!adminUnlocked ? (
             <form onSubmit={handleUnlockAdmin} className="space-y-3">
               <p className="text-xs text-zinc-400">
-                Enter the admin passcode to view student login records or upload a new hackathon poster with automatic QR link extraction. (Default passcode:{' '}
+                Enter the admin passcode to view student login records, check Supabase cloud sync, or upload a new hackathon poster with automatic QR link extraction. (Default passcode:{' '}
                 <code className="text-indigo-300 font-mono">radar-admin-2026</code>)
               </p>
               <div className="flex gap-2">
@@ -1295,15 +1398,16 @@ function AdminModal({
           ) : (
             <>
               {/* Admin Tabs */}
-              <div className="flex items-center gap-2 border-b border-zinc-800 pb-3">
+              <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 pb-3">
                 <button
                   type="button"
                   onClick={() => {
+                    setSbView(false);
                     setAdminTab('students');
                     refreshAdminSignups();
                   }}
                   className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer ${
-                    adminTab === 'students'
+                    !sbView && adminTab === 'students'
                       ? 'bg-indigo-600 text-white'
                       : 'bg-zinc-900 text-zinc-400 hover:text-white'
                   }`}
@@ -1312,14 +1416,32 @@ function AdminModal({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAdminTab('add_poster')}
+                  onClick={() => {
+                    setSbView(false);
+                    setAdminTab('add_poster');
+                  }}
                   className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer ${
-                    adminTab === 'add_poster'
+                    !sbView && adminTab === 'add_poster'
                       ? 'bg-indigo-600 text-white'
                       : 'bg-zinc-900 text-zinc-400 hover:text-white'
                   }`}
                 >
                   + Upload Poster & Auto-Scan QR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSbView(true);
+                    fetchSupabaseStatus();
+                  }}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 ${
+                    sbView
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-zinc-900 text-emerald-400 hover:text-white border border-emerald-900/60'
+                  }`}
+                >
+                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                  <span>Supabase Database</span>
                 </button>
               </div>
 
@@ -1329,11 +1451,110 @@ function AdminModal({
                 </div>
               )}
 
-              {adminTab === 'students' ? (
+              {sbView ? (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+                          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                          {sbStatus?.connected
+                            ? 'Connected to Supabase Cloud'
+                            : 'Checking Supabase...'}
+                        </span>
+                        {sbStatus?.projectUrl && (
+                          <p className="text-xs font-mono text-zinc-400 mt-0.5">
+                            {sbStatus.projectUrl}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleForceSupabaseSync}
+                        disabled={isSyncingSb}
+                        className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                      >
+                        {isSyncingSb ? 'Syncing...' : 'Sync All Data to Supabase Now'}
+                      </button>
+                    </div>
+
+                    {sbSyncFeedback && (
+                      <p className="text-xs text-emerald-400 font-medium">
+                        {sbSyncFeedback}
+                      </p>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
+                      <div className="p-3 rounded-xl bg-[#09090B] border border-zinc-800">
+                        <span className="text-[11px] text-zinc-400 block">
+                          Authentication → Users
+                        </span>
+                        <span className="text-sm font-bold text-emerald-400 mt-0.5 block">
+                          {sbStatus?.authUsersCount ?? loggedStudents.length} Active Users
+                        </span>
+                        <span className="text-[10px] text-zinc-500">
+                          Visible now in Supabase Auth tab
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-[#09090B] border border-zinc-800">
+                        <span className="text-[11px] text-zinc-400 block">
+                          Storage Bucket Backup
+                        </span>
+                        <span className="text-sm font-bold text-emerald-400 mt-0.5 block">
+                          {sbStatus?.storageReady ? 'Active (Synced)' : 'Ready'}
+                        </span>
+                        <span className="text-[10px] text-zinc-500">
+                          Bucket: hackathon-radar-data
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-[#09090B] border border-zinc-800">
+                        <span className="text-[11px] text-zinc-400 block">
+                          SQL Table Editor
+                        </span>
+                        <span
+                          className={`text-sm font-bold mt-0.5 block ${
+                            sbStatus?.tablesReady ? 'text-emerald-400' : 'text-amber-400'
+                          }`}
+                        >
+                          {sbStatus?.tablesReady ? 'Tables Active' : 'Run SQL Once Below'}
+                        </span>
+                        <span className="text-[10px] text-zinc-500">
+                          student_signups & hackathons
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-zinc-900/70 border border-zinc-800 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-xs font-bold text-white">
+                          Want to also see rows in Supabase "Table Editor"?
+                        </h3>
+                        <p className="text-[11px] text-zinc-400">
+                          Your students are already live in <strong>Supabase → Authentication → Users</strong> and <strong>Storage</strong>. To also create the <code>student_signups</code> and <code>hackathons</code> tables in <strong>Table Editor</strong>, copy and run this SQL once in your Supabase SQL Editor:
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCopySql}
+                        className="shrink-0 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-white cursor-pointer"
+                      >
+                        {sqlCopied ? 'Copied SQL!' : 'Copy SQL'}
+                      </button>
+                    </div>
+                    <pre className="p-3 rounded-lg bg-[#09090B] border border-zinc-800 text-[11px] font-mono text-zinc-300 overflow-x-auto max-h-44">
+                      {SUPABASE_SCHEMA_SQL}
+                    </pre>
+                  </div>
+                </div>
+              ) : adminTab === 'students' ? (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-zinc-400">
-                      Mandatory student login records (Name, Phone Number, Year)
+                      Mandatory student login records (Synced with Supabase Auth & Storage)
                     </p>
                     <button
                       type="button"

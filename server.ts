@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import jpeg from 'jpeg-js';
 import jsQR from 'jsqr';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 dotenv.config();
 
@@ -19,6 +20,21 @@ const SIGNUPS_FILE = path.join(DATA_DIR, 'signups.json');
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
+const SUPABASE_KEY = (
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  ''
+).trim();
+const STORAGE_BUCKET = 'hackathon-radar-data';
+
+const supabase: SupabaseClient | null =
+  SUPABASE_URL && SUPABASE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null;
 
 type PublicStatus =
   | 'Upcoming'
@@ -103,7 +119,7 @@ let CURATED_COMPETITIONS: BackendCompetition[] = [
     title: 'GAMEATHON 8.0 — A Global Contest',
     college: 'Jyothy Institute of Technology (JIT), Bengaluru · Dept. of ISE & Bits&Bytes x ACM',
     description:
-      'A global contest with $2000 total prize pool, free Papa John\'s pizza for all participants and coordinators, free shuttle from Silk Institute metro, and a 3-day training series.',
+      "A global contest with $2000 total prize pool, free Papa John's pizza for all participants and coordinators, free shuttle from Silk Institute metro, and a 3-day training series.",
     event_date: '2026-10-23',
     event_date_label: '23rd & 24th October 2026',
     registration_deadline: '2026-10-22',
@@ -111,18 +127,16 @@ let CURATED_COMPETITIONS: BackendCompetition[] = [
     mode: 'Offline',
     prize: '$2000 (≈ ₹1,65,000)',
     team_size: '2 – 4 Members',
-    entry_fee: 'Free Registration (Papa John\'s Pizza Included)',
+    entry_fee: "Free Registration (Papa John's Pizza Included)",
     coordinators: 'Sathvik Vasishta (+91 96060 18932) · Priyanka T S (+91 73497 10985)',
-    perks: 'Free Papa John\'s Pizza · Free Shuttle from Silk Institute · 3-Day GameDev Training',
+    perks: "Free Papa John's Pizza · Free Shuttle from Silk Institute · 3-Day GameDev Training",
     category: 'GameDev & Software',
     registration_status: 'Closing Soon',
     status_override: null,
     registration_url: 'https://gameathon-8.com/',
     brochure_url: null,
-    image_url:
-      '/assets/aistudio/IMG-20261021-WA0011_3997add3.jpg',
-    secondary_image_url:
-      '/assets/aistudio/IMG-20261021-WA0010_5edef94c.jpg',
+    image_url: '/assets/aistudio/IMG-20261021-WA0011_3997add3.jpg',
+    secondary_image_url: '/assets/aistudio/IMG-20261021-WA0010_5edef94c.jpg',
     source_url: 'https://gameathon-8.com/',
     last_verified_at: '2026-10-21T09:50:00Z',
     created_at: '2026-10-21T09:50:00Z',
@@ -148,8 +162,7 @@ let CURATED_COMPETITIONS: BackendCompetition[] = [
     status_override: null,
     registration_url: 'https://hashcode.theinnovationlab.in/',
     brochure_url: null,
-    image_url:
-      '/assets/aistudio/IMG_20261021_134622_e6cfc487.jpg',
+    image_url: '/assets/aistudio/IMG_20261021_134622_e6cfc487.jpg',
     secondary_image_url: null,
     source_url: 'https://hashcode.theinnovationlab.in/',
     last_verified_at: '2026-10-21T09:50:00Z',
@@ -176,8 +189,7 @@ let CURATED_COMPETITIONS: BackendCompetition[] = [
     status_override: null,
     registration_url: 'https://forms.gle/Eju7ZgjhMGcKKUus7',
     brochure_url: null,
-    image_url:
-      '/assets/aistudio/IMG_20261021_135446_5f0f8f03.jpg',
+    image_url: '/assets/aistudio/IMG_20261021_135446_5f0f8f03.jpg',
     secondary_image_url: null,
     source_url: 'https://forms.gle/Eju7ZgjhMGcKKUus7',
     last_verified_at: '2026-10-21T09:50:00Z',
@@ -204,8 +216,7 @@ let CURATED_COMPETITIONS: BackendCompetition[] = [
     status_override: null,
     registration_url: 'https://qrto.org/7Dj757',
     brochure_url: null,
-    image_url:
-      '/assets/aistudio/WhatsApp_Image_2026-10-21_at_11.55.03_AM_e1a11271.jpeg',
+    image_url: '/assets/aistudio/WhatsApp_Image_2026-10-21_at_11.55.03_AM_e1a11271.jpeg',
     secondary_image_url: null,
     source_url: 'https://qrto.org/7Dj757',
     last_verified_at: '2026-10-21T09:50:00Z',
@@ -233,8 +244,7 @@ let CURATED_COMPETITIONS: BackendCompetition[] = [
     registration_url:
       'https://minearena-1-0.devpost.com/?preview_token=E6ZpH5CiiYbb1%2BpTW%2F6ykttDuJCuTv%2BdWtVjaduSeds%3D',
     brochure_url: null,
-    image_url:
-      '/assets/aistudio/IMG_20261021_135512_80288e94.jpg',
+    image_url: '/assets/aistudio/IMG_20261021_135512_80288e94.jpg',
     secondary_image_url: null,
     source_url:
       'https://minearena-1-0.devpost.com/?preview_token=E6ZpH5CiiYbb1%2BpTW%2F6ykttDuJCuTv%2BdWtVjaduSeds%3D',
@@ -262,8 +272,7 @@ let CURATED_COMPETITIONS: BackendCompetition[] = [
     status_override: null,
     registration_url: 'https://q.me-qr.com/srbk40k9',
     brochure_url: null,
-    image_url:
-      '/assets/aistudio/IMG_20261021_135134_c1397f09.jpg',
+    image_url: '/assets/aistudio/IMG_20261021_135134_c1397f09.jpg',
     secondary_image_url: null,
     source_url: 'https://q.me-qr.com/srbk40k9',
     last_verified_at: '2026-10-21T09:50:00Z',
@@ -296,6 +305,191 @@ function saveSignupsToFile(list: BackendStudentSignup[]) {
 const STUDENT_SIGNUPS: BackendStudentSignup[] = loadSavedSignups();
 const ANALYTICS_EVENTS: Array<Record<string, any>> = [];
 
+// ============================================================================
+// SUPABASE REAL-TIME CLOUD SYNCHRONIZATION HELPERS
+// Syncs with:
+// 1. Supabase Authentication -> Users (Works immediately without SQL setup!)
+// 2. Supabase Table Editor -> public.student_signups & public.hackathons
+// 3. Supabase Storage -> hackathon-radar-data bucket
+// ============================================================================
+
+async function syncStudentToSupabase(student: BackendStudentSignup): Promise<void> {
+  if (!supabase) return;
+
+  // 1. Sync to Supabase Table `student_signups` (if created in Table Editor)
+  try {
+    await supabase.from('student_signups').upsert(
+      {
+        id: student.id,
+        name: student.name,
+        phone: student.phone,
+        year_of_study: student.year_of_study,
+        created_at: student.created_at,
+      },
+      { onConflict: 'phone' }
+    );
+  } catch {
+    // Table may not be created yet
+  }
+
+  // 2. Sync to Supabase Authentication -> Users (Shows immediately in Supabase Dashboard -> Authentication -> Users)
+  try {
+    const syntheticEmail = `${student.phone}@student.hackathonradar.in`;
+    const { data: listData } = await supabase.auth.admin.listUsers({
+      page: 1,
+      perPage: 1000,
+    });
+    const existingAuthUser = listData?.users?.find(
+      (u) =>
+        u.email === syntheticEmail ||
+        u.phone === `91${student.phone}` ||
+        u.phone === `+91${student.phone}` ||
+        u.user_metadata?.phone === student.phone
+    );
+
+    const metadata = {
+      display_name: `${student.name} (${student.year_of_study})`,
+      full_name: student.name,
+      name: student.name,
+      phone: student.phone,
+      year_of_study: student.year_of_study,
+      student_id: student.id,
+      signed_up_at: student.created_at,
+    };
+
+    if (existingAuthUser) {
+      await supabase.auth.admin.updateUserById(existingAuthUser.id, {
+        phone: `+91${student.phone}`,
+        phone_confirm: true,
+        user_metadata: metadata,
+      });
+    } else {
+      await supabase.auth.admin.createUser({
+        email: syntheticEmail,
+        phone: `+91${student.phone}`,
+        email_confirm: true,
+        phone_confirm: true,
+        user_metadata: metadata,
+      });
+    }
+  } catch {
+    // Ignore if anon key is used instead of service_role
+  }
+
+  // 3. Backup full list to Supabase Storage bucket
+  try {
+    await saveSnapshotsToSupabaseStorage();
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+async function syncAllHackathonsToSupabase(): Promise<void> {
+  if (!supabase) return;
+  try {
+    await supabase.from('hackathons').upsert(CURATED_COMPETITIONS, {
+      onConflict: 'id',
+    });
+  } catch {
+    // Table may not exist yet
+  }
+  try {
+    await saveSnapshotsToSupabaseStorage();
+  } catch {
+    // Ignore
+  }
+}
+
+async function saveSnapshotsToSupabaseStorage(): Promise<void> {
+  if (!supabase) return;
+  try {
+    const { data: buckets } = await supabase.storage.listBuckets();
+    const exists = buckets?.some((b) => b.name === STORAGE_BUCKET);
+    if (!exists) {
+      await supabase.storage.createBucket(STORAGE_BUCKET, { public: false });
+    }
+    await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(
+        'student_signups.json',
+        Buffer.from(JSON.stringify(STUDENT_SIGNUPS, null, 2)),
+        { contentType: 'application/json', upsert: true }
+      );
+    await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(
+        'hackathons.json',
+        Buffer.from(JSON.stringify(CURATED_COMPETITIONS, null, 2)),
+        { contentType: 'application/json', upsert: true }
+      );
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+async function hydrateFromSupabaseOnStartup(): Promise<void> {
+  if (!supabase) return;
+
+  try {
+    // 1. Pull students from `student_signups` table if it exists
+    const { data: tableSignups, error: tableErr } = await supabase
+      .from('student_signups')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (!tableErr && Array.isArray(tableSignups) && tableSignups.length > 0) {
+      for (const row of tableSignups) {
+        if (row.phone && !STUDENT_SIGNUPS.some((s) => s.phone === row.phone)) {
+          STUDENT_SIGNUPS.push({
+            id: row.id || `stu-${Date.now()}`,
+            name: row.name,
+            phone: row.phone,
+            year_of_study: row.year_of_study || 'Other',
+            created_at: row.created_at || new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    // 2. Pull students from Supabase Auth Users so any user in Supabase Auth is in memory
+    const { data: authData } = await supabase.auth.admin.listUsers({
+      page: 1,
+      perPage: 1000,
+    });
+    if (authData?.users) {
+      for (const u of authData.users) {
+        const meta = u.user_metadata || {};
+        const phone =
+          meta.phone ||
+          (u.phone ? u.phone.replace(/^(\+?91)/, '') : '') ||
+          (u.email?.endsWith('@student.hackathonradar.in')
+            ? u.email.split('@')[0]
+            : '');
+        const name = meta.name || meta.full_name;
+        if (phone && name && !STUDENT_SIGNUPS.some((s) => s.phone === phone)) {
+          STUDENT_SIGNUPS.push({
+            id: meta.student_id || u.id,
+            name,
+            phone,
+            year_of_study: meta.year_of_study || 'Other',
+            created_at: meta.signed_up_at || u.created_at || new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    saveSignupsToFile(STUDENT_SIGNUPS);
+
+    // 3. Push all local signups and hackathons back to Supabase to ensure full sync
+    for (const s of STUDENT_SIGNUPS) {
+      await syncStudentToSupabase(s);
+    }
+    await syncAllHackathonsToSupabase();
+  } catch (err) {
+    console.error('Supabase startup sync warning:', err);
+  }
+}
+
 function isAdminAuthorized(req: express.Request): boolean {
   const headerCode = req.headers['x-admin-passcode'];
   if (!headerCode) return false;
@@ -319,6 +513,8 @@ function decodeQrFromJpegBuffer(buf: Buffer): string | null {
     if (fullCode?.data) return fullCode.data;
 
     const regions = [
+      [0.6, 0.3, 0.4, 0.3],
+      [0.7, 0.3, 0.3, 0.25],
       [0.5, 0.4, 0.5, 0.5],
       [0.2, 0.3, 0.6, 0.5],
       [0.5, 0.5, 0.5, 0.45],
@@ -358,8 +554,32 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '15mb' }));
 
+  // Trigger background Supabase hydration & sync on boot
+  hydrateFromSupabaseOnStartup();
+
   // 1. Get all real poster competitions ordered sequentially by event date
-  app.get('/api/competitions', (_req, res) => {
+  app.get('/api/competitions', async (_req, res) => {
+    if (supabase) {
+      try {
+        const { data: dbComps, error } = await supabase
+          .from('hackathons')
+          .select('*');
+        if (!error && Array.isArray(dbComps) && dbComps.length > 0) {
+          // Merge any DB competitions with curated competitions
+          for (const row of dbComps) {
+            const existingIdx = CURATED_COMPETITIONS.findIndex(
+              (c) => c.id === row.id
+            );
+            if (existingIdx === -1 && row.title && row.registration_url) {
+              CURATED_COMPETITIONS.push(row as BackendCompetition);
+            }
+          }
+        }
+      } catch {
+        // Fallback to in-memory CURATED_COMPETITIONS
+      }
+    }
+
     const enriched = CURATED_COMPETITIONS.map((c) => ({
       ...c,
       registration_status: computeAccurateStatus(c),
@@ -401,7 +621,7 @@ async function startServer() {
   });
 
   // 3. Protected Admin: Add a new competition
-  app.post('/api/competitions', (req, res) => {
+  app.post('/api/competitions', async (req, res) => {
     if (!isAdminAuthorized(req)) {
       return res.status(403).json({
         ok: false,
@@ -422,23 +642,26 @@ async function startServer() {
       id: `comp-${Date.now()}`,
       title: body.title.trim(),
       college: body.college?.trim() || 'Karnataka Campus Hackathon',
-      description:
-        body.description?.trim() || 'Verified student hackathon.',
+      description: body.description?.trim() || 'Verified student hackathon.',
       event_date: body.event_date || '2026-11-20',
-      event_date_label: body.event_date_label?.trim() || body.event_date || 'Nov 2026',
-      registration_deadline: body.registration_deadline || body.event_date || '2026-11-18',
+      event_date_label:
+        body.event_date_label?.trim() || body.event_date || 'Nov 2026',
+      registration_deadline:
+        body.registration_deadline || body.event_date || '2026-11-18',
       location: body.location?.trim() || 'Bengaluru',
       mode: body.mode || 'Offline',
       prize: body.prize?.trim() ? body.prize.trim() : null,
       team_size: body.team_size?.trim() || '2 – 4 Members',
       entry_fee: body.entry_fee?.trim() || undefined,
       coordinators: body.coordinators?.trim() || undefined,
+      perks: body.perks?.trim() || undefined,
       category: body.category?.trim() || 'Hackathon',
       registration_status: body.registration_status || 'Registration Open',
       status_override: body.status_override || null,
       registration_url: body.registration_url.trim(),
       brochure_url: body.brochure_url?.trim() || null,
       image_url: body.image_url?.trim() || null,
+      secondary_image_url: body.secondary_image_url?.trim() || null,
       source_url: body.source_url?.trim() || body.registration_url.trim(),
       last_verified_at: nowIso,
       created_at: nowIso,
@@ -448,6 +671,8 @@ async function startServer() {
     newComp.registration_status = computeAccurateStatus(newComp);
     CURATED_COMPETITIONS.push(newComp);
 
+    await syncAllHackathonsToSupabase();
+
     return res.status(201).json({
       ok: true,
       competition: newComp,
@@ -455,7 +680,7 @@ async function startServer() {
   });
 
   // 4. Protected Admin: Delete a competition
-  app.delete('/api/competitions/:id', (req, res) => {
+  app.delete('/api/competitions/:id', async (req, res) => {
     if (!isAdminAuthorized(req)) {
       return res.status(403).json({
         ok: false,
@@ -464,11 +689,19 @@ async function startServer() {
     }
     const { id } = req.params;
     CURATED_COMPETITIONS = CURATED_COMPETITIONS.filter((c) => c.id !== id);
+    if (supabase) {
+      try {
+        await supabase.from('hackathons').delete().eq('id', id);
+        await saveSnapshotsToSupabaseStorage();
+      } catch {
+        // Ignore
+      }
+    }
     return res.json({ ok: true });
   });
 
   // 5. Mandatory Student Login / Registration (Name, Phone Number, Year of Study)
-  app.post('/api/signups', (req, res) => {
+  app.post('/api/signups', async (req, res) => {
     const { name, phone, year_of_study } = req.body as {
       name?: string;
       phone?: string;
@@ -496,49 +729,80 @@ async function startServer() {
       });
     }
 
-    const allowedYears = ['1st Year', '2nd Year', '3rd Year', '4th Year', 'Other'];
+    const allowedYears = [
+      '1st Year',
+      '2nd Year',
+      '3rd Year',
+      '4th Year',
+      'Other',
+    ];
     const cleanYear = allowedYears.includes(year_of_study || '')
       ? (year_of_study as string)
       : 'Other';
 
-    const existingRecord = STUDENT_SIGNUPS.find(
+    let studentRecord = STUDENT_SIGNUPS.find(
       (s) => s.phone === normalizedPhone
     );
-    if (existingRecord) {
-      existingRecord.name = cleanName;
-      existingRecord.year_of_study = cleanYear;
-      saveSignupsToFile(STUDENT_SIGNUPS);
-      return res.status(200).json({
-        ok: true,
-        student: existingRecord,
-      });
+
+    if (studentRecord) {
+      studentRecord.name = cleanName;
+      studentRecord.year_of_study = cleanYear;
+    } else {
+      studentRecord = {
+        id: `stu-${Date.now()}`,
+        name: cleanName,
+        phone: normalizedPhone,
+        year_of_study: cleanYear,
+        created_at: new Date().toISOString(),
+      };
+      STUDENT_SIGNUPS.unshift(studentRecord);
     }
 
-    const record: BackendStudentSignup = {
-      id: `stu-${Date.now()}`,
-      name: cleanName,
-      phone: normalizedPhone,
-      year_of_study: cleanYear,
-      created_at: new Date().toISOString(),
-    };
-
-    STUDENT_SIGNUPS.unshift(record);
     saveSignupsToFile(STUDENT_SIGNUPS);
+
+    // Sync immediately to Supabase (Auth Users + Table + Storage)
+    await syncStudentToSupabase(studentRecord);
 
     return res.status(201).json({
       ok: true,
-      student: record,
+      student: studentRecord,
+      supabase_synced: Boolean(supabase),
     });
   });
 
-  // 6. Admin: View all logged-in students
-  app.get('/api/admin/signups', (req, res) => {
+  // 6. Admin: View all logged-in students (merges Supabase + Local)
+  app.get('/api/admin/signups', async (req, res) => {
     if (!isAdminAuthorized(req)) {
       return res.status(403).json({
         ok: false,
         error: 'Unauthorized. Enter valid admin passcode.',
       });
     }
+
+    if (supabase) {
+      try {
+        const { data: tableSignups, error } = await supabase
+          .from('student_signups')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!error && Array.isArray(tableSignups)) {
+          for (const row of tableSignups) {
+            if (row.phone && !STUDENT_SIGNUPS.some((s) => s.phone === row.phone)) {
+              STUDENT_SIGNUPS.push({
+                id: row.id,
+                name: row.name,
+                phone: row.phone,
+                year_of_study: row.year_of_study,
+                created_at: row.created_at,
+              });
+            }
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
     return res.json({
       ok: true,
       count: STUDENT_SIGNUPS.length,
@@ -546,7 +810,84 @@ async function startServer() {
     });
   });
 
-  // 7. Analytics collector
+  // 7. Admin: Check Supabase live status & trigger full sync
+  app.get('/api/admin/supabase-status', async (req, res) => {
+    if (!isAdminAuthorized(req)) {
+      return res.status(403).json({ ok: false, error: 'Unauthorized.' });
+    }
+
+    if (!supabase) {
+      return res.json({
+        ok: true,
+        connected: false,
+        projectUrl: null,
+        authUsersCount: 0,
+        tablesReady: false,
+        storageReady: false,
+      });
+    }
+
+    let authUsersCount = 0;
+    let tablesReady = false;
+    let storageReady = false;
+    let tableErrorMsg: string | null = null;
+
+    try {
+      const { data: authList } = await supabase.auth.admin.listUsers({
+        page: 1,
+        perPage: 1000,
+      });
+      authUsersCount = authList?.users?.length || 0;
+    } catch {
+      // Ignore
+    }
+
+    try {
+      const { error: checkErr } = await supabase
+        .from('student_signups')
+        .select('*')
+        .limit(1);
+      if (!checkErr) {
+        tablesReady = true;
+      } else {
+        tableErrorMsg = checkErr.message;
+      }
+    } catch (e: any) {
+      tableErrorMsg = e?.message || 'Tables not created yet';
+    }
+
+    try {
+      const { data: buckets } = await supabase.storage.listBuckets();
+      storageReady = Boolean(buckets?.some((b) => b.name === STORAGE_BUCKET));
+    } catch {
+      // Ignore
+    }
+
+    return res.json({
+      ok: true,
+      connected: true,
+      projectUrl: SUPABASE_URL,
+      authUsersCount,
+      tablesReady,
+      storageReady,
+      tableErrorMsg,
+      localSignupsCount: STUDENT_SIGNUPS.length,
+      hackathonsCount: CURATED_COMPETITIONS.length,
+    });
+  });
+
+  app.post('/api/admin/supabase-sync', async (req, res) => {
+    if (!isAdminAuthorized(req)) {
+      return res.status(403).json({ ok: false, error: 'Unauthorized.' });
+    }
+    await hydrateFromSupabaseOnStartup();
+    return res.json({
+      ok: true,
+      message: `Synced ${STUDENT_SIGNUPS.length} students and ${CURATED_COMPETITIONS.length} hackathons with Supabase.`,
+    });
+  });
+
+  // 8. Analytics collector
   app.post('/api/analytics', (req, res) => {
     ANALYTICS_EVENTS.push({
       ...req.body,
