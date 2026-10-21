@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Share2,
   Calendar,
+  Download,
 } from 'lucide-react';
 import {
   ActiveRoute,
@@ -28,6 +29,7 @@ import { EventArtworkBanner } from '../components/VisualAssets';
 interface EventDetailsPageProps {
   event: HackathonEvent;
   student: StudentProfile;
+  onUpdateStudent?: (updated: StudentProfile) => void;
   collegeCalendar?: CollegeAcademicCalendar;
   isSaved: boolean;
   savedStage?: SavedRegistrationStage;
@@ -40,6 +42,7 @@ interface EventDetailsPageProps {
 export const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
   event,
   student,
+  onUpdateStudent,
   collegeCalendar,
   isSaved,
   savedStage = 'bookmarked',
@@ -66,6 +69,45 @@ export const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
     navigator.clipboard?.writeText(window.location.href);
     setCopiedShareLink(true);
     setTimeout(() => setCopiedShareLink(false), 2000);
+  };
+
+  const handleDownloadIcsCalendar = () => {
+    const startCompact = (event.startDate || '2026-11-06').replace(/-/g, '');
+    const endCompact = (event.endDate || '2026-11-07').replace(/-/g, '');
+    const regCompact = (event.registrationCloseDate || '2026-10-30').replace(
+      /-/g,
+      ''
+    );
+
+    const icsContent = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Hackathon Radar//Karnataka 2026//EN',
+      'BEGIN:VEVENT',
+      `UID:${event.id}-participation@hackathonradar.app`,
+      `DTSTART;VALUE=DATE:${startCompact}`,
+      `DTEND;VALUE=DATE:${endCompact}`,
+      `SUMMARY:${event.title} (Participation Window)`,
+      `LOCATION:${event.venueName}, ${event.city}`,
+      `DESCRIPTION:Compatibility Status: ${compatibility.badgeLabel}. ${compatibility.headlineReasoning} Official URL: ${event.officialRegistrationUrl}`,
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      `UID:${event.id}-regdeadline@hackathonradar.app`,
+      `DTSTART;VALUE=DATE:${regCompact}`,
+      `DTEND;VALUE=DATE:${regCompact}`,
+      `SUMMARY:Registration Closes: ${event.title}`,
+      `DESCRIPTION:Submit your team registration on ${event.officialRegistrationUrl}`,
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+
+    const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${event.slug}-2026-schedule.ics`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -160,6 +202,15 @@ export const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
           <div className="flex flex-wrap items-center gap-3 shrink-0">
             <button
               type="button"
+              onClick={handleDownloadIcsCalendar}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-semibold bg-[#18181B] hover:bg-[#27272A] border border-[#27272A] text-[#FAFAFA] transition-colors whitespace-nowrap shrink-0"
+            >
+              <Download className="w-4 h-4 text-[#8B5CF6]" />
+              <span>Export .ICS</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => onToggleSave(event.id)}
               className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 ${
                 isSaved
@@ -190,7 +241,10 @@ export const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
           <div className="flex flex-wrap items-center gap-1 border-b border-[#27272A]">
             {(
               [
-                { id: 'compatibility', label: `Academic Compatibility (${compatibility.badgeLabel})` },
+                {
+                  id: 'compatibility',
+                  label: `Academic Compatibility (${compatibility.badgeLabel})`,
+                },
                 { id: 'overview', label: 'Overview & Themes' },
                 { id: 'schedule', label: `Rounds & Date History (${event.rounds.length})` },
                 { id: 'eligibility', label: 'Eligibility & Rules' },
@@ -229,7 +283,7 @@ export const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
                   onClick={() => onNavigate('my-academic-calendar')}
                   className="text-xs font-semibold text-[#A78BFA] hover:underline shrink-0"
                 >
-                  Upload PDF / Edit Prep Buffer →
+                  Upload PDF / Manage Full Calendar →
                 </button>
               </div>
 
@@ -262,6 +316,59 @@ export const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
                   {compatibility.registrationDeadlineNote}
                 </p>
               </div>
+
+              {/* Interactive What-If Buffer Controls */}
+              {onUpdateStudent && (
+                <div className="p-4 rounded-xl bg-[#18181B] border border-[#27272A] grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div className="space-y-2">
+                    <span className="text-[#A1A1AA] font-medium block">
+                      What-If Exam Prep Buffer (Before Exams):
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {[1, 2, 3, 5].map((days) => (
+                        <button
+                          key={days}
+                          type="button"
+                          onClick={() =>
+                            onUpdateStudent({ ...student, prepBufferDays: days })
+                          }
+                          className={`px-3 py-1.5 rounded-lg font-mono font-semibold border transition-colors ${
+                            student.prepBufferDays === days
+                              ? 'bg-[#8B5CF6] border-[#8B5CF6] text-[#FAFAFA]'
+                              : 'bg-[#111114] border-[#27272A] text-[#A1A1AA] hover:text-[#FAFAFA]'
+                          }`}
+                        >
+                          {days}d
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <span className="text-[#A1A1AA] font-medium block">
+                      What-If Inter-City Travel Buffer:
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {[0, 1, 2].map((days) => (
+                        <button
+                          key={days}
+                          type="button"
+                          onClick={() =>
+                            onUpdateStudent({ ...student, travelBufferDays: days })
+                          }
+                          className={`px-3 py-1.5 rounded-lg font-mono font-semibold border transition-colors ${
+                            student.travelBufferDays === days
+                              ? 'bg-[#8B5CF6] border-[#8B5CF6] text-[#FAFAFA]'
+                              : 'bg-[#111114] border-[#27272A] text-[#A1A1AA] hover:text-[#FAFAFA]'
+                          }`}
+                        >
+                          ±{days}d
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Round-by-Round Compatibility Breakdown */}
               <div className="space-y-3">
@@ -305,7 +412,10 @@ export const EventDetailsPage: React.FC<EventDetailsPageProps> = ({
               </div>
 
               <div className="pt-3 border-t border-[#27272A] text-xs text-[#71717A]">
-                Date Source Attribution: <span className="font-mono text-[#A1A1AA]">{compatibility.sourceAttribution}</span>
+                Date Source Attribution:{' '}
+                <span className="font-mono text-[#A1A1AA]">
+                  {compatibility.sourceAttribution}
+                </span>
               </div>
             </div>
           )}

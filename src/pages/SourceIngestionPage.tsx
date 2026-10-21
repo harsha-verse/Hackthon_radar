@@ -6,17 +6,34 @@ import {
   RefreshCw,
   ArrowRight,
   Globe,
+  History,
 } from 'lucide-react';
 import {
   ActiveRoute,
+  CollegeAcademicCalendar,
+  FieldChangeRecord,
   HackathonDomain,
   HackathonEvent,
   SourceAdapterStatus,
+  StudentProfile,
 } from '../types/hackathon';
+import { evaluateAcademicCompatibility } from '../lib/compatibilityEngine';
 
 interface SourceIngestionPageProps {
   adapters: SourceAdapterStatus[];
+  events: HackathonEvent[];
+  student: StudentProfile;
+  collegeCalendar?: CollegeAcademicCalendar;
   onAddIngestedEvent: (newEvent: HackathonEvent) => void;
+  onApplyEventScheduleChange: (
+    eventId: string,
+    updatedDates: {
+      startDate: string;
+      endDate: string;
+      registrationCloseDate: string;
+    },
+    changes: FieldChangeRecord[]
+  ) => void;
   onSelectEvent: (eventId: string) => void;
   onNavigate: (route: ActiveRoute) => void;
 }
@@ -41,7 +58,11 @@ Official URL: https://example-blr-college.edu.in/open-hack-2025`;
 
 export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
   adapters,
+  events,
+  student,
+  collegeCalendar,
   onAddIngestedEvent,
+  onApplyEventScheduleChange,
   onSelectEvent,
   onNavigate,
 }) => {
@@ -52,6 +73,44 @@ export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
   const [isIngesting, setIsIngesting] = useState(false);
   const [ingestionResult, setIngestionResult] = useState<any | null>(null);
   const [publishedEventId, setPublishedEventId] = useState<string | null>(null);
+
+  // Stage 6: Schedule Change & Deadline Extension Detector State
+  const active2026Events = events.filter((e) => e.editionYear >= 2026);
+  const defaultTargetEvent =
+    active2026Events.find((e) => e.id === 'hack-rvce-deeptech-2026') ||
+    active2026Events[0];
+
+  const [changeEventId, setChangeEventId] = useState<string>(
+    defaultTargetEvent?.id || ''
+  );
+  const [newRegCloseDate, setNewRegCloseDate] = useState<string>('2026-11-15');
+  const [newStartDate, setNewStartDate] = useState<string>('2026-11-28');
+  const [newEndDate, setNewEndDate] = useState<string>('2026-11-29');
+  const [corrigendumUrl, setCorrigendumUrl] = useState<string>(
+    'https://rvce.edu.in/deeptech-2026/corrigendum-post-exams'
+  );
+  const [isDetectingChanges, setIsDetectingChanges] = useState(false);
+  const [changeDetectionResult, setChangeDetectionResult] = useState<any | null>(
+    null
+  );
+  const [appliedScheduleUpdate, setAppliedScheduleUpdate] = useState(false);
+
+  const selectedTargetEvent =
+    active2026Events.find((e) => e.id === changeEventId) || defaultTargetEvent;
+
+  const handleSelectTargetEventForChange = (id: string) => {
+    setChangeEventId(id);
+    setChangeDetectionResult(null);
+    setAppliedScheduleUpdate(false);
+    const found = active2026Events.find((e) => e.id === id);
+    if (found) {
+      // Pre-fill a realistic post-exam reschedule window so user can test compatibility shift
+      setNewRegCloseDate('2026-11-15');
+      setNewStartDate('2026-11-28');
+      setNewEndDate('2026-11-29');
+      setCorrigendumUrl(`${found.officialWebsite}/schedule-update`);
+    }
+  };
 
   const handleRunLiveIngestion = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,6 +137,52 @@ export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
     } finally {
       setIsIngesting(false);
     }
+  };
+
+  const handleRunChangeDetection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTargetEvent) return;
+    setIsDetectingChanges(true);
+    setChangeDetectionResult(null);
+    setAppliedScheduleUpdate(false);
+
+    try {
+      const response = await fetch('/api/sources/detect-changes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventId: selectedTargetEvent.id,
+          currentStartDate: selectedTargetEvent.startDate,
+          currentEndDate: selectedTargetEvent.endDate,
+          currentRegCloseDate: selectedTargetEvent.registrationCloseDate,
+          newStartDate,
+          newEndDate,
+          newRegCloseDate,
+          sourceUrl: corrigendumUrl,
+          announcementNote:
+            'Organizer rescheduled finale after VTU/BMSCE end-semester exams',
+        }),
+      });
+      const data = await response.json();
+      setChangeDetectionResult(data);
+    } catch (err: any) {
+      setChangeDetectionResult({
+        ok: false,
+        error: err?.message || 'Failed to run schedule change detection.',
+      });
+    } finally {
+      setIsDetectingChanges(false);
+    }
+  };
+
+  const handleCommitDetectedChanges = () => {
+    if (!selectedTargetEvent || !changeDetectionResult?.ok) return;
+    onApplyEventScheduleChange(
+      selectedTargetEvent.id,
+      changeDetectionResult.updatedDates,
+      changeDetectionResult.changes
+    );
+    setAppliedScheduleUpdate(true);
   };
 
   const handlePublishCandidateToDatabase = () => {
@@ -165,7 +270,7 @@ export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
         },
       ],
       changeHistory: [],
-      verificationStatus: 'pending', // Auto-extracted events are never auto-marked verified without human review!
+      verificationStatus: 'pending',
       extractedAt: new Date().toISOString(),
       lastCheckedAt: new Date().toISOString(),
       lastVerifiedAt: null,
@@ -210,7 +315,13 @@ export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
           type: 'n8n-nodes-base.if',
           parameters: {
             conditions: {
-              number: [{ value1: '={{$json.candidate.editionYear}}', operation: 'largerEqual', value2: 2026 }],
+              number: [
+                {
+                  value1: '={{$json.candidate.editionYear}}',
+                  operation: 'largerEqual',
+                  value2: 2026,
+                },
+              ],
             },
           },
         },
@@ -228,6 +339,39 @@ export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  // Compute before/after compatibility preview for Stage 6 Change Detector
+  const currentComp = selectedTargetEvent
+    ? evaluateAcademicCompatibility(
+        selectedTargetEvent,
+        collegeCalendar?.items || [],
+        student
+      )
+    : null;
+
+  const previewUpdatedComp =
+    selectedTargetEvent && changeDetectionResult?.ok
+      ? evaluateAcademicCompatibility(
+          {
+            ...selectedTargetEvent,
+            startDate: changeDetectionResult.updatedDates.startDate,
+            endDate: changeDetectionResult.updatedDates.endDate,
+            registrationCloseDate:
+              changeDetectionResult.updatedDates.registrationCloseDate,
+            rounds: selectedTargetEvent.rounds.map((r, idx) =>
+              idx === selectedTargetEvent.rounds.length - 1
+                ? {
+                    ...r,
+                    startDate: changeDetectionResult.updatedDates.startDate,
+                    endDate: changeDetectionResult.updatedDates.endDate,
+                  }
+                : r
+            ),
+          },
+          collegeCalendar?.items || [],
+          student
+        )
+      : null;
+
   return (
     <div className="max-w-[1360px] mx-auto px-4 sm:px-6 py-8 space-y-10">
       {/* Page Header */}
@@ -236,13 +380,15 @@ export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
           <div className="flex items-center gap-2 text-xs text-[#A78BFA] font-medium mb-1">
             <span>Stage 5 & Stage 6 Implementation</span>
             <span aria-hidden="true">·</span>
-            <span>Permitted Source Adapters · Historical 2025 Rejection · n8n Blueprint</span>
+            <span>
+              Permitted Source Adapters · Historical 2025 Rejection · Schedule Diff Detector
+            </span>
           </div>
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#FAFAFA]">
-            Real Event Ingestion & Source Health Dashboard
+            Real Event Ingestion, Change Tracking & Source Health
           </h1>
           <p className="text-sm text-[#A1A1AA] mt-1 max-w-3xl">
-            Test the end-to-end permitted source extraction pipeline (`POST /api/sources/ingest`), verify that 2025 historical circulars are automatically blocked from upcoming listings, and inspect connected source adapters.
+            Test the end-to-end permitted source extraction pipeline (`POST /api/sources/ingest`), verify that 2025 historical circulars are blocked, and simulate organizer deadline extensions & round reschedules (`POST /api/sources/detect-changes`).
           </p>
         </div>
 
@@ -256,7 +402,7 @@ export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
         </button>
       </div>
 
-      {/* Live End-to-End Source Extraction & Historical Validation Tester */}
+      {/* 1. Live End-to-End Source Extraction & Historical Validation Tester */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         <form
           onSubmit={handleRunLiveIngestion}
@@ -264,7 +410,7 @@ export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
         >
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#27272A] pb-3">
             <h2 className="font-display text-lg font-bold text-[#FAFAFA]">
-              End-to-End Permitted Source Extraction Pipeline
+              1. End-to-End Permitted Source Extraction Pipeline
             </h2>
             <div className="flex items-center gap-2">
               <button
@@ -429,12 +575,202 @@ export const SourceIngestionPage: React.FC<SourceIngestionPageProps> = ({
         </div>
       </div>
 
-      {/* Source Coverage & Health Dashboard */}
+      {/* 2. Stage 6: Live Organizer Schedule Change & Deadline Extension Detector */}
+      <div className="bg-[#111114] border border-[#27272A] rounded-xl p-6 space-y-6">
+        <div className="border-b border-[#27272A] pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <History className="w-5 h-5 text-[#8B5CF6]" />
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#FAFAFA]">
+                2. Organizer Schedule Change & Deadline Extension Detector (`POST /api/sources/detect-changes`)
+              </h2>
+              <p className="text-xs text-[#A1A1AA] mt-0.5">
+                Simulate an official corrigendum where an organizer extends registration or moves participation dates after college exams—recording an audit trail in <code className="font-mono text-[#FAFAFA]">changeHistory</code> and recalculating student compatibility.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          <form
+            onSubmit={handleRunChangeDetection}
+            className="lg:col-span-7 space-y-4 text-xs"
+          >
+            <div className="space-y-1.5">
+              <label className="text-[#A1A1AA] font-medium block">
+                Select Active 2026 Hackathon to Check for Organizer Schedule Updates
+              </label>
+              <select
+                value={changeEventId}
+                onChange={(e) => handleSelectTargetEventForChange(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-lg bg-[#18181B] border border-[#27272A] text-xs text-[#FAFAFA]"
+              >
+                {active2026Events.map((ev) => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.title} (Current: {ev.startDate} to {ev.endDate} · Reg:{' '}
+                    {ev.registrationCloseDate})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[#A1A1AA] block mb-1">
+                  Updated Reg. Close Date
+                </label>
+                <input
+                  type="date"
+                  value={newRegCloseDate}
+                  onChange={(e) => setNewRegCloseDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-[#18181B] border border-[#27272A] font-mono text-xs text-[#FAFAFA]"
+                />
+              </div>
+              <div>
+                <label className="text-[#A1A1AA] block mb-1">
+                  Rescheduled Start Date
+                </label>
+                <input
+                  type="date"
+                  value={newStartDate}
+                  onChange={(e) => setNewStartDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-[#18181B] border border-[#27272A] font-mono text-xs text-[#FAFAFA]"
+                />
+              </div>
+              <div>
+                <label className="text-[#A1A1AA] block mb-1">
+                  Rescheduled End Date
+                </label>
+                <input
+                  type="date"
+                  value={newEndDate}
+                  onChange={(e) => setNewEndDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-[#18181B] border border-[#27272A] font-mono text-xs text-[#FAFAFA]"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[#A1A1AA] block">
+                Official Corrigendum / Updated Source URL
+              </label>
+              <input
+                type="url"
+                value={corrigendumUrl}
+                onChange={(e) => setCorrigendumUrl(e.target.value)}
+                className="w-full px-3.5 py-2 rounded-lg bg-[#18181B] border border-[#27272A] font-mono text-xs text-[#FAFAFA]"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isDetectingChanges}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#8B5CF6] hover:bg-[#7C3AED] text-xs font-semibold text-[#FAFAFA]"
+            >
+              <RefreshCw
+                className={`w-4 h-4 ${isDetectingChanges ? 'animate-spin' : ''}`}
+              />
+              <span>Run Server Diff & Preview Compatibility Impact</span>
+            </button>
+          </form>
+
+          {/* Right 5 cols: Diff & Compatibility Shift Preview */}
+          <div className="lg:col-span-5 bg-[#18181B] border border-[#27272A] rounded-xl p-5 space-y-4 text-xs">
+            <h3 className="font-display text-sm font-bold text-[#FAFAFA] border-b border-[#27272A] pb-2.5">
+              Detected Schedule Diff & Compatibility Recalculation
+            </h3>
+
+            {!changeDetectionResult ? (
+              <div className="py-6 text-[#A1A1AA] space-y-2 leading-relaxed">
+                <p>
+                  Current Status for <strong className="text-[#FAFAFA]">{selectedTargetEvent?.title}</strong>:
+                </p>
+                {currentComp && (
+                  <div className="p-3 rounded-lg bg-[#111114] border border-[#27272A] space-y-1">
+                    <span className="font-semibold text-[#F59E0B] block">
+                      Current Verdict: {currentComp.badgeLabel}
+                    </span>
+                    <p className="text-[#71717A]">{currentComp.headlineReasoning}</p>
+                  </div>
+                )}
+                <p className="text-[#71717A]">
+                  Click "Run Server Diff & Preview Compatibility Impact" to test how rescheduling the event to Nov 28–29, 2026 resolves the exam preparation conflict.
+                </p>
+              </div>
+            ) : !changeDetectionResult.ok ? (
+              <div className="p-3.5 rounded-lg bg-[#EF4444]/10 border border-[#EF4444]/30 text-[#EF4444]">
+                {changeDetectionResult.error}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-[#22C55E] font-medium">
+                  {changeDetectionResult.auditMessage}
+                </p>
+
+                <div className="space-y-1.5">
+                  {changeDetectionResult.changes.map((chg: FieldChangeRecord) => (
+                    <div
+                      key={chg.id}
+                      className="p-2.5 rounded bg-[#111114] border border-[#27272A] font-mono text-[11px]"
+                    >
+                      <span className="text-[#A78BFA]">{chg.field}</span>:{' '}
+                      <span className="line-through text-[#71717A]">
+                        {chg.previousValue}
+                      </span>{' '}
+                      → <span className="text-[#22C55E] font-semibold">{chg.newValue}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {currentComp && previewUpdatedComp && (
+                  <div className="p-3 rounded-lg bg-[#111114] border border-[#27272A] space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[#71717A]">Compatibility Shift:</span>
+                      <span className="font-semibold text-[#22C55E]">
+                        {currentComp.badgeLabel} → {previewUpdatedComp.badgeLabel}
+                      </span>
+                    </div>
+                    <p className="text-[#A1A1AA]">{previewUpdatedComp.headlineReasoning}</p>
+                  </div>
+                )}
+
+                {!appliedScheduleUpdate ? (
+                  <button
+                    type="button"
+                    onClick={handleCommitDetectedChanges}
+                    className="w-full py-2.5 px-4 rounded-lg bg-[#22C55E] hover:bg-[#16A34A] text-xs font-semibold text-[#09090B]"
+                  >
+                    Apply Schedule Update & Save Change Audit History
+                  </button>
+                ) : (
+                  <div className="p-3 rounded-lg bg-[#8B5CF6]/15 border border-[#8B5CF6]/40 flex items-center justify-between">
+                    <span className="text-[#FAFAFA] font-medium">
+                      Schedule & Change History Updated!
+                    </span>
+                    {selectedTargetEvent && (
+                      <button
+                        type="button"
+                        onClick={() => onSelectEvent(selectedTargetEvent.id)}
+                        className="text-[#A78BFA] font-semibold hover:underline inline-flex items-center gap-1"
+                      >
+                        <span>Inspect Event</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Source Coverage & Health Dashboard */}
       <div className="bg-[#111114] border border-[#27272A] rounded-xl p-6 space-y-5">
         <div className="border-b border-[#27272A] pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
             <h2 className="font-display text-lg font-bold text-[#FAFAFA]">
-              Source Coverage & Adapter Health Dashboard
+              3. Source Coverage & Adapter Health Dashboard
             </h2>
             <p className="text-xs text-[#A1A1AA] mt-0.5">
               Honest source coverage disclosure: Hackathon Radar only ingests from permitted feeds, official circulars, and direct submissions—never claiming unrestricted internet-wide scraping.
