@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import jpeg from 'jpeg-js';
 import jsQR from 'jsqr';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { GoogleGenAI, Type } from '@google/genai';
 
 dotenv.config();
 
@@ -552,7 +553,7 @@ function decodeQrFromJpegBuffer(buf: Buffer): string | null {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '15mb' }));
+  app.use(express.json({ limit: '50mb' }));
 
   // Trigger background Supabase hydration & sync on boot
   hydrateFromSupabaseOnStartup();
@@ -591,32 +592,215 @@ async function startServer() {
     });
   });
 
-  // 2. Scan QR code directly from an uploaded JPEG hackathon poster
-  app.post('/api/scan-poster', (req, res) => {
+  // 2. Scan QR code AND automatically extract all event fields from an uploaded hackathon poster
+  app.post('/api/scan-poster', async (req, res) => {
     const { imageBase64 } = req.body as { imageBase64?: string };
     if (!imageBase64) {
       return res.status(400).json({ ok: false, error: 'No image provided.' });
     }
+
+    let mimeType = 'image/jpeg';
+    if (imageBase64.startsWith('data:')) {
+      const match = imageBase64.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
+      if (match?.[1]) {
+        mimeType = match[1];
+      }
+    }
+
     const base64Clean = imageBase64.includes(',')
       ? imageBase64.split(',')[1]
       : imageBase64;
     const buffer = Buffer.from(base64Clean, 'base64');
-    const decoded = decodeQrFromJpegBuffer(buffer);
 
-    if (!decoded) {
+    // Step A: Decode QR code directly from image buffer
+    const decodedQr = decodeQrFromJpegBuffer(buffer);
+    const normalizedQrUrl = decodedQr
+      ? decodedQr.startsWith('http')
+        ? decodedQr
+        : `https://${decodedQr}`
+      : '';
+
+    // Step B: Automatically extract Name, College/Organization, Address/Venue, Date, Deadline & Prize Pool via Gemini Vision
+    let extracted: {
+      title?: string;
+      college?: string;
+      event_date?: string;
+      event_date_label?: string;
+      registration_deadline?: string;
+      location?: string;
+      prize?: string;
+      team_size?: string;
+      registration_url?: string;
+    } | null = null;
+
+    if (process.env.GEMINI_API_KEY) {
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const candidateModels = [
+        'gemini-3.1-flash-lite',
+        'gemini-3.8-flash',
+        'gemini-flash-latest',
+      ];
+
+      const qrHintText = normalizedQrUrl
+        ? ` Note: The QR code on this poster points to "${normalizedQrUrl}". Use this URL/domain as an additional clue if helpful.`
+        : '';
+
+      for (const modelName of candidateModels) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType,
+                    data: base64Clean,
+                  },
+                },
+                {
+                  text:
+                    'Carefully analyze this hackathon/competition poster image (including all logos, headers, stylized titles, and footer text) and extract the exact details printed on it.' +
+                    qrHintText +
+                    '\nCRITICAL RULES:\n' +
+                    '1. "title": Extract the main Event Name / Hackathon Name (even if written in large stylized typography or logo graphics, e.g., "Hashcode 14.0", "GAMEATHON 8.0", "SENTINEL HACK 6.0", "CHAKRAVYUH", "NEXUS 1.0"). Never leave title empty.\n' +
+                    '2. "college": Extract the host College Name, University Name, Institute, Club, or Organization Name (look at top/bottom logos, headers, "Presented by", "Organized by", "Department of...", or the QR domain).\n' +
+                    '3. "location": Extract the Venue / Address / Location. IMPORTANT: For most college events, the location IS the host college/university campus itself! If an explicit venue/city is mentioned, combine the college name and venue/city (e.g., "PES University Campus, Bengaluru" or "SJBIT Campus, Kengeri, Bengaluru"). If no separate location is printed, set "location" to the host College / Organization name itself.\n' +
+                    '4. "event_date" & "registration_deadline": Use YYYY-MM-DD format (assume year 2026 if year is not printed). If registration_deadline is not explicitly printed, set it to 1 day before event_date.',
+                },
+              ],
+            },
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  title: {
+                    type: Type.STRING,
+                    description:
+                      'Exact name/title of the hackathon or competition (e.g. "Hashcode 14.0", "GAMEATHON 8.0").',
+                  },
+                  college: {
+                    type: Type.STRING,
+                    description:
+                      'Host college, university, institute, club, or organization name printed on the poster or logo.',
+                  },
+                  event_date: {
+                    type: Type.STRING,
+                    description:
+                      'Start date of the event in YYYY-MM-DD format (use 2026 if year is not mentioned).',
+                  },
+                  event_date_label: {
+                    type: Type.STRING,
+                    description:
+                      'Human-readable event date/time as shown on the poster (e.g. "24th & 25th October 2026").',
+                  },
+                  registration_deadline: {
+                    type: Type.STRING,
+                    description:
+                      'Registration deadline date in YYYY-MM-DD format (or 1 day prior to event_date if not explicitly stated).',
+                  },
+                  location: {
+                    type: Type.STRING,
+                    description:
+                      'Full venue / campus / address. If no separate venue is printed, use the host college/organization campus name.',
+                  },
+                  prize: {
+                    type: Type.STRING,
+                    description:
+                      'Total prize pool or cash prize printed on the poster (e.g. "₹1,00,000", "$2000", "₹75,000").',
+                  },
+                  team_size: {
+                    type: Type.STRING,
+                    description:
+                      'Team size requirement if printed on the poster (e.g. "2 – 4 Members", "3 – 4 Members").',
+                  },
+                  registration_url: {
+                    type: Type.STRING,
+                    description:
+                      'Any website or registration link text visibly printed on the poster (empty string if none).',
+                  },
+                },
+                required: [
+                  'title',
+                  'college',
+                  'event_date',
+                  'event_date_label',
+                  'registration_deadline',
+                  'location',
+                  'prize',
+                ],
+              },
+            },
+          });
+
+          if (response.text) {
+            const rawText = response.text
+              .trim()
+              .replace(/^```json\s*/i, '')
+              .replace(/```$/i, '')
+              .trim();
+            const parsed = JSON.parse(rawText);
+            if (parsed && typeof parsed === 'object') {
+              extracted = parsed;
+              break;
+            }
+          }
+        } catch (err) {
+          console.error(`Poster AI extraction attempt (${modelName}) error:`, err);
+        }
+      }
+    }
+
+    // Post-process extracted fields so College/Organization and Location reinforce each other
+    if (extracted) {
+      const cleanCollege = (extracted.college || '').trim();
+      const cleanLocation = (extracted.location || '').trim();
+      const isGenericLocation =
+        !cleanLocation ||
+        /^(not specified|n\/a|none|unknown|null|tba|offline|campus)$/i.test(
+          cleanLocation
+        );
+
+      if (cleanCollege && isGenericLocation) {
+        extracted.location = cleanCollege;
+      } else if (
+        cleanCollege &&
+        cleanLocation &&
+        cleanLocation.toLowerCase() === 'bengaluru' &&
+        !cleanCollege.toLowerCase().includes('bengaluru')
+      ) {
+        extracted.location = `${cleanCollege}, Bengaluru`;
+      } else if (!cleanCollege && cleanLocation && !isGenericLocation) {
+        extracted.college = cleanLocation;
+      }
+    }
+
+    const finalUrl =
+      normalizedQrUrl ||
+      (extracted?.registration_url?.startsWith('http')
+        ? extracted.registration_url
+        : '');
+
+    if (!finalUrl && !extracted?.title) {
       return res.json({
         ok: false,
         error:
-          'Could not detect a QR code in this image. You can paste the registration link manually.',
+          'Could not auto-extract details from this image. Please fill in the fields below.',
       });
     }
 
-    const normalizedUrl = decoded.startsWith('http')
-      ? decoded
-      : `https://${decoded}`;
     return res.json({
       ok: true,
-      qrUrl: normalizedUrl,
+      qrUrl: finalUrl,
+      extracted,
     });
   });
 

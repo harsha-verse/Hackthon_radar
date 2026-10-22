@@ -264,7 +264,7 @@ export function App() {
   // Poster Lightbox Modal State
   const [activePosterComp, setActivePosterComp] =
     useState<CuratedCompetition | null>(null);
-  const [lightboxTab, setLightboxTab] = useState<'poster' | 'roadmap'>('poster');
+  const [lightboxTab, setLightboxTab] = useState<'poster' | 'roadmap' | 'brochure'>('poster');
 
   // Admin Modal State (View student signups + Scan Poster QR to add events)
   const [showAdminModal, setShowAdminModal] = useState(false);
@@ -280,8 +280,10 @@ export function App() {
   const [loggedStudents, setLoggedStudents] = useState<StudentSignupRecord[]>([]);
   const [adminStatusMsg, setAdminStatusMsg] = useState<string | null>(null);
 
-  // Admin Add Poster + Auto QR Scanner State
+  // Admin Add Poster + Auto QR Scanner + Event Brochure State
   const [posterPreviewDataUrl, setPosterPreviewDataUrl] = useState<string>('');
+  const [newBrochureDataUrl, setNewBrochureDataUrl] = useState<string>('');
+  const [newBrochureFileName, setNewBrochureFileName] = useState<string>('');
   const [isScanningQr, setIsScanningQr] = useState(false);
   const [qrScanFeedback, setQrScanFeedback] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState('');
@@ -289,7 +291,7 @@ export function App() {
   const [newEventDate, setNewEventDate] = useState('2026-11-20');
   const [newEventDateLabel, setNewEventDateLabel] = useState('');
   const [newDeadline, setNewDeadline] = useState('2026-11-18');
-  const [newLocation, setNewLocation] = useState('Bengaluru');
+  const [newLocation, setNewLocation] = useState('');
   const [newMode, setNewMode] = useState<CompetitionMode>('Offline');
   const [newPrize, setNewPrize] = useState('');
   const [newTeamSize, setNewTeamSize] = useState('2 – 4 Members');
@@ -473,19 +475,71 @@ export function App() {
           body: JSON.stringify({ imageBase64: base64 }),
         });
         const data = await res.json();
-        if (data?.ok && data.qrUrl) {
-          setNewRegUrl(data.qrUrl);
-          setQrScanFeedback(`QR Code detected: ${data.qrUrl}`);
+        const ext = data?.extracted;
+
+        const extractedTitle = (ext?.title || '').trim();
+        const extractedCollege = (ext?.college || '').trim();
+        const rawLocation = (ext?.location || '').trim();
+        const resolvedLocation =
+          rawLocation &&
+          !/^(not specified|n\/a|none|unknown|null|tba)$/i.test(rawLocation)
+            ? rawLocation
+            : extractedCollege;
+        const resolvedCollege = extractedCollege || resolvedLocation;
+
+        if (extractedTitle) setNewTitle(extractedTitle);
+        if (resolvedCollege) setNewCollege(resolvedCollege);
+        if (resolvedLocation) setNewLocation(resolvedLocation);
+        if (ext?.event_date) setNewEventDate(ext.event_date);
+        if (ext?.event_date_label) setNewEventDateLabel(ext.event_date_label);
+        if (ext?.registration_deadline) setNewDeadline(ext.registration_deadline);
+        if (ext?.prize) setNewPrize(ext.prize);
+        if (ext?.team_size) setNewTeamSize(ext.team_size);
+
+        const detectedUrl = data?.qrUrl || ext?.registration_url || '';
+        if (detectedUrl) {
+          setNewRegUrl(detectedUrl);
+        }
+
+        const autoFilledFields: string[] = [];
+        if (extractedTitle) autoFilledFields.push(`Event: "${extractedTitle}"`);
+        if (resolvedCollege) autoFilledFields.push(`College/Org: ${resolvedCollege}`);
+        if (resolvedLocation) autoFilledFields.push(`Location: ${resolvedLocation}`);
+        if (ext?.prize) autoFilledFields.push(`Prize: ${ext.prize}`);
+        if (ext?.registration_deadline)
+          autoFilledFields.push(`Deadline: ${ext.registration_deadline}`);
+        if (detectedUrl) autoFilledFields.push(`Link: ${detectedUrl}`);
+
+        if (autoFilledFields.length > 0) {
+          setQrScanFeedback(
+            `Auto-extracted from poster → ${autoFilledFields.join(' · ')}`
+          );
         } else {
           setQrScanFeedback(
-            data?.error || 'No QR code auto-detected. Paste link manually below.'
+            data?.error ||
+              'Poster uploaded. Could not auto-detect all fields — review or edit below.'
           );
         }
       } catch {
-        setQrScanFeedback('Could not scan QR code. Paste link manually.');
+        setQrScanFeedback('Could not analyze poster automatically. Fill details below.');
       } finally {
         setIsScanningQr(false);
       }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handleBrochureFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setNewBrochureDataUrl('');
+      setNewBrochureFileName('');
+      return;
+    }
+    setNewBrochureFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setNewBrochureDataUrl(String(reader.result || ''));
     };
     reader.readAsDataURL(file);
   }
@@ -497,6 +551,10 @@ export function App() {
       return;
     }
 
+    const finalCollege =
+      newCollege.trim() || newLocation.trim() || 'Karnataka Campus Hackathon';
+    const finalLocation = newLocation.trim() || finalCollege;
+
     try {
       const res = await fetch('/api/competitions', {
         method: 'POST',
@@ -506,17 +564,18 @@ export function App() {
         },
         body: JSON.stringify({
           title: newTitle.trim(),
-          college: newCollege.trim() || 'Karnataka Campus Hackathon',
+          college: finalCollege,
           event_date: newEventDate,
           event_date_label:
             newEventDateLabel.trim() || formatReadableDate(newEventDate),
           registration_deadline: newDeadline || newEventDate,
-          location: newLocation.trim() || 'Bengaluru',
+          location: finalLocation,
           mode: newMode,
           prize: newPrize.trim() || null,
           team_size: newTeamSize.trim() || '2 – 4 Members',
           registration_url: newRegUrl.trim(),
           image_url: posterPreviewDataUrl || null,
+          brochure_url: newBrochureDataUrl || null,
         }),
       });
       const data = await res.json();
@@ -527,9 +586,12 @@ export function App() {
       setCompetitions((prev) => [...prev, data.competition]);
       setNewTitle('');
       setNewCollege('');
+      setNewLocation('');
       setNewPrize('');
       setNewRegUrl('');
       setPosterPreviewDataUrl('');
+      setNewBrochureDataUrl('');
+      setNewBrochureFileName('');
       setQrScanFeedback(null);
       setAdminStatusMsg('Hackathon added in sequential order!');
     } catch {
@@ -560,9 +622,11 @@ export function App() {
         {/* Top Minimal Brand Bar */}
         <header className="w-full max-w-5xl mx-auto px-4 sm:px-6 pt-6 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="h-9 w-9 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-600/25">
-              HR
-            </div>
+            <img
+              src="/assets/aistudio/Futuristic_Purple_Orbit_Compass_Logo_2351c1b2.png"
+              alt="Hackathon Radar"
+              className="h-9 w-9 rounded-xl object-cover border border-indigo-500/30 shadow-lg shadow-indigo-600/25"
+            />
             <div>
               <span className="font-bold tracking-tight text-base text-white block leading-none">
                 Hackathon Radar
@@ -740,6 +804,9 @@ export function App() {
             adminStatusMsg={adminStatusMsg}
             posterPreviewDataUrl={posterPreviewDataUrl}
             handlePosterFileChange={handlePosterFileChange}
+            newBrochureDataUrl={newBrochureDataUrl}
+            newBrochureFileName={newBrochureFileName}
+            handleBrochureFileChange={handleBrochureFileChange}
             isScanningQr={isScanningQr}
             qrScanFeedback={qrScanFeedback}
             newTitle={newTitle}
@@ -781,9 +848,11 @@ export function App() {
       <header className="sticky top-0 z-30 backdrop-blur-md bg-[#09090B]/85 border-b border-zinc-800/80">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <div className="h-9 w-9 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-white text-sm">
-              HR
-            </div>
+            <img
+              src="/assets/aistudio/Futuristic_Purple_Orbit_Compass_Logo_2351c1b2.png"
+              alt="Hackathon Radar"
+              className="h-9 w-9 rounded-xl object-cover border border-indigo-500/30 shadow-lg shadow-indigo-600/25"
+            />
             <div>
               <span className="font-bold text-white text-base tracking-tight block leading-none">
                 Hackathon Radar
@@ -973,9 +1042,9 @@ export function App() {
                       </div>
                     </div>
 
-                    {/* Action Bar: Direct QR Link + View Poster */}
+                    {/* Action Bar: Direct QR Link + View Poster + Brochure */}
                     <div className="mt-5 pt-4 border-t border-zinc-800/80 flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={() => {
@@ -987,6 +1056,20 @@ export function App() {
                           <ZoomIn className="w-3.5 h-3.5 text-indigo-400" />
                           <span>View Poster</span>
                         </button>
+
+                        {comp.brochure_url && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActivePosterComp(comp);
+                              setLightboxTab('brochure');
+                            }}
+                            className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-emerald-900/60 text-xs font-medium text-emerald-300 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Event Brochure</span>
+                          </button>
+                        )}
 
                         {comp.secondary_image_url && (
                           <button
@@ -1028,7 +1111,7 @@ export function App() {
         </div>
       </main>
 
-      {/* Full-Screen Poster Lightbox Modal */}
+      {/* Full-Screen Poster & Brochure Lightbox Modal */}
       {activePosterComp && (
         <div
           className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4"
@@ -1054,9 +1137,10 @@ export function App() {
               </button>
             </div>
 
-            {/* Tab switch if secondary image (e.g. Training Roadmap) exists */}
-            {activePosterComp.secondary_image_url && (
-              <div className="flex items-center gap-2 px-4 py-2 border-b border-zinc-800 bg-zinc-950/80">
+            {/* Tab switch if Brochure or Training Roadmap exists */}
+            {(activePosterComp.secondary_image_url ||
+              activePosterComp.brochure_url) && (
+              <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-zinc-800 bg-zinc-950/80">
                 <button
                   type="button"
                   onClick={() => setLightboxTab('poster')}
@@ -1068,22 +1152,75 @@ export function App() {
                 >
                   Official Contest Poster
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setLightboxTab('roadmap')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
-                    lightboxTab === 'roadmap'
-                      ? 'bg-amber-600 text-white'
-                      : 'text-zinc-400 hover:text-white bg-zinc-900'
-                  }`}
-                >
-                  3-Day Training Roadmap (19–21 Oct)
-                </button>
+                {activePosterComp.brochure_url && (
+                  <button
+                    type="button"
+                    onClick={() => setLightboxTab('brochure')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                      lightboxTab === 'brochure'
+                        ? 'bg-emerald-600 text-white'
+                        : 'text-zinc-400 hover:text-white bg-zinc-900'
+                    }`}
+                  >
+                    Event Brochure
+                  </button>
+                )}
+                {activePosterComp.secondary_image_url && (
+                  <button
+                    type="button"
+                    onClick={() => setLightboxTab('roadmap')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                      lightboxTab === 'roadmap'
+                        ? 'bg-amber-600 text-white'
+                        : 'text-zinc-400 hover:text-white bg-zinc-900'
+                    }`}
+                  >
+                    3-Day Training Roadmap (19–21 Oct)
+                  </button>
+                )}
               </div>
             )}
 
-            <div className="p-4 overflow-y-auto flex-1 flex items-center justify-center bg-black">
-              {lightboxTab === 'roadmap' && activePosterComp.secondary_image_url ? (
+            <div className="p-4 overflow-y-auto flex-1 flex flex-col items-center justify-center bg-black">
+              {lightboxTab === 'brochure' && activePosterComp.brochure_url ? (
+                activePosterComp.brochure_url.startsWith('data:application/pdf') ||
+                activePosterComp.brochure_url.toLowerCase().endsWith('.pdf') ? (
+                  <div className="w-full space-y-3">
+                    <iframe
+                      src={activePosterComp.brochure_url}
+                      title={`${activePosterComp.title} Brochure`}
+                      className="w-full h-[60vh] rounded-lg border border-zinc-800 bg-white"
+                    />
+                    <div className="flex justify-end">
+                      <a
+                        href={activePosterComp.brochure_url}
+                        download={`${activePosterComp.title.replace(/\s+/g, '-')}-Brochure.pdf`}
+                        className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Download Brochure PDF</span>
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-3">
+                    <img
+                      src={activePosterComp.brochure_url}
+                      alt={`${activePosterComp.title} Brochure`}
+                      className="max-h-[65vh] w-auto object-contain rounded-lg"
+                    />
+                    <a
+                      href={activePosterComp.brochure_url}
+                      download={`${activePosterComp.title.replace(/\s+/g, '-')}-Brochure`}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Brochure</span>
+                    </a>
+                  </div>
+                )
+              ) : lightboxTab === 'roadmap' &&
+                activePosterComp.secondary_image_url ? (
                 <img
                   src={activePosterComp.secondary_image_url}
                   alt={`${activePosterComp.title} Training Roadmap`}
@@ -1134,6 +1271,9 @@ export function App() {
           adminStatusMsg={adminStatusMsg}
           posterPreviewDataUrl={posterPreviewDataUrl}
           handlePosterFileChange={handlePosterFileChange}
+          newBrochureDataUrl={newBrochureDataUrl}
+          newBrochureFileName={newBrochureFileName}
+          handleBrochureFileChange={handleBrochureFileChange}
           isScanningQr={isScanningQr}
           qrScanFeedback={qrScanFeedback}
           newTitle={newTitle}
@@ -1179,6 +1319,9 @@ interface AdminModalProps {
   adminStatusMsg: string | null;
   posterPreviewDataUrl: string;
   handlePosterFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  newBrochureDataUrl: string;
+  newBrochureFileName: string;
+  handleBrochureFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isScanningQr: boolean;
   qrScanFeedback: string | null;
   newTitle: string;
@@ -1264,6 +1407,9 @@ function AdminModal({
   adminStatusMsg,
   posterPreviewDataUrl,
   handlePosterFileChange,
+  newBrochureDataUrl,
+  newBrochureFileName,
+  handleBrochureFileChange,
   isScanningQr,
   qrScanFeedback,
   newTitle,
@@ -1603,26 +1749,45 @@ function AdminModal({
               ) : (
                 <div className="space-y-5">
                   <form onSubmit={handleAdminCreateCompetition} className="space-y-3">
-                    <div className="p-3.5 rounded-xl bg-zinc-900/80 border border-zinc-800">
-                      <label className="block text-xs font-semibold text-white mb-1">
-                        1. Upload Hackathon Poster (JPEG) to Auto-Scan QR Link
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/jpg,image/png"
-                        onChange={handlePosterFileChange}
-                        className="block w-full text-xs text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500"
-                      />
-                      {isScanningQr && (
-                        <p className="text-xs text-indigo-400 mt-2">
-                          Scanning poster QR code...
-                        </p>
-                      )}
-                      {qrScanFeedback && (
-                        <p className="text-xs text-emerald-400 mt-2 font-mono break-all">
-                          {qrScanFeedback}
-                        </p>
-                      )}
+                    <div className="p-3.5 rounded-xl bg-zinc-900/80 border border-zinc-800 space-y-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-white mb-1">
+                          1. Upload Hackathon Poster (Auto-Fetches Event Name, College/Organization, Location, Deadline, Prize Pool & QR Link)
+                        </label>
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/jpg,image/png,image/webp"
+                          onChange={handlePosterFileChange}
+                          className="block w-full text-xs text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500"
+                        />
+                        {isScanningQr && (
+                          <p className="text-xs text-indigo-400 mt-2 animate-pulse">
+                            Analyzing poster for Event Name, College/Organization, Location, Prize Pool & QR Code...
+                          </p>
+                        )}
+                        {qrScanFeedback && (
+                          <p className="text-xs text-emerald-400 mt-2 font-mono break-all">
+                            {qrScanFeedback}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="pt-2.5 border-t border-zinc-800/80">
+                        <label className="block text-xs font-semibold text-emerald-300 mb-1">
+                          2. Upload Event Brochure (Optional — PDF or Brochure Image)
+                        </label>
+                        <input
+                          type="file"
+                          accept="application/pdf,image/jpeg,image/jpg,image/png,image/webp"
+                          onChange={handleBrochureFileChange}
+                          className="block w-full text-xs text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500"
+                        />
+                        {newBrochureDataUrl && (
+                          <p className="text-xs text-emerald-400 mt-1.5 font-mono">
+                            ✓ Brochure attached: {newBrochureFileName || 'Event Brochure'}
+                          </p>
+                        )}
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1631,22 +1796,44 @@ function AdminModal({
                         required
                         value={newTitle}
                         onChange={(e) => setNewTitle(e.target.value)}
-                        placeholder="Hackathon Title *"
+                        placeholder="Event Name / Hackathon Title (Auto-filled) *"
                         className="px-3 py-2 rounded-xl bg-[#09090B] border border-zinc-800 text-xs text-white"
                       />
                       <input
                         type="text"
                         value={newCollege}
-                        onChange={(e) => setNewCollege(e.target.value)}
-                        placeholder="College / Organizer *"
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setNewCollege(val);
+                          if (!newLocation.trim()) {
+                            setNewLocation(val);
+                          }
+                        }}
+                        placeholder="College / Organization Name (Auto-filled) *"
                         className="px-3 py-2 rounded-xl bg-[#09090B] border border-zinc-800 text-xs text-white"
                       />
-                      <input
-                        type="date"
-                        value={newEventDate}
-                        onChange={(e) => setNewEventDate(e.target.value)}
-                        className="px-3 py-2 rounded-xl bg-[#09090B] border border-zinc-800 text-xs text-white"
-                      />
+                      <div>
+                        <span className="block text-[10px] text-zinc-400 mb-1">
+                          Event Date (Auto-filled)
+                        </span>
+                        <input
+                          type="date"
+                          value={newEventDate}
+                          onChange={(e) => setNewEventDate(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-[#09090B] border border-zinc-800 text-xs text-white"
+                        />
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-zinc-400 mb-1">
+                          Registration Deadline (Auto-filled)
+                        </span>
+                        <input
+                          type="date"
+                          value={newDeadline}
+                          onChange={(e) => setNewDeadline(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-[#09090B] border border-zinc-800 text-xs text-white"
+                        />
+                      </div>
                       <input
                         type="text"
                         value={newEventDateLabel}
@@ -1658,14 +1845,21 @@ function AdminModal({
                         type="text"
                         value={newPrize}
                         onChange={(e) => setNewPrize(e.target.value)}
-                        placeholder="Prize Pool (e.g. ₹1,00,000)"
+                        placeholder="Prize Pool (Auto-filled, e.g. ₹1,00,000)"
                         className="px-3 py-2 rounded-xl bg-[#09090B] border border-zinc-800 text-xs text-white"
                       />
                       <input
                         type="text"
                         value={newLocation}
                         onChange={(e) => setNewLocation(e.target.value)}
-                        placeholder="Venue / Location"
+                        placeholder="Location / College Campus (Auto-filled)"
+                        className="px-3 py-2 rounded-xl bg-[#09090B] border border-zinc-800 text-xs text-white"
+                      />
+                      <input
+                        type="text"
+                        value={newTeamSize}
+                        onChange={(e) => setNewTeamSize(e.target.value)}
+                        placeholder="Team Size (Auto-filled, e.g. 2 - 4 Members)"
                         className="px-3 py-2 rounded-xl bg-[#09090B] border border-zinc-800 text-xs text-white"
                       />
                     </div>
@@ -1675,7 +1869,7 @@ function AdminModal({
                       required
                       value={newRegUrl}
                       onChange={(e) => setNewRegUrl(e.target.value)}
-                      placeholder="Direct Registration URL (Auto-filled from QR or paste here) *"
+                      placeholder="Direct Registration URL (Auto-filled from QR or Poster) *"
                       className="w-full px-3 py-2 rounded-xl bg-[#09090B] border border-zinc-800 text-xs text-white font-mono"
                     />
 
