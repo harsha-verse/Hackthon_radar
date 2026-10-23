@@ -80,9 +80,47 @@ interface BackendStudentSignup {
   created_at: string;
 }
 
+function parseDateEndOfDayIST(dateStr?: string | null): number | null {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const trimmed = dateStr.trim();
+  if (!trimmed) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const ms = new Date(`${trimmed}T23:59:59.999+05:30`).getTime();
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  const ms = new Date(trimmed).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function parseReferenceTimeMs(
+  referenceInput?: string | number | Date
+): number {
+  if (referenceInput === undefined || referenceInput === null) {
+    return Date.now();
+  }
+  if (typeof referenceInput === 'number') {
+    return referenceInput;
+  }
+  if (referenceInput instanceof Date) {
+    return referenceInput.getTime();
+  }
+  const trimmed = referenceInput.trim();
+  if (!trimmed) {
+    return Date.now();
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const ms = new Date(`${trimmed}T00:00:00.000+05:30`).getTime();
+    return Number.isNaN(ms) ? Date.now() : ms;
+  }
+  const ms = new Date(trimmed).getTime();
+  return Number.isNaN(ms) ? Date.now() : ms;
+}
+
 function computeAccurateStatus(
   comp: BackendCompetition,
-  referenceDateStr = '2026-10-21'
+  referenceInput?: string | number | Date
 ): PublicStatus {
   if (comp.status_override) {
     return comp.status_override;
@@ -91,26 +129,43 @@ function computeAccurateStatus(
     return 'Results Announced';
   }
 
-  const refTime = new Date(`${referenceDateStr}T00:00:00Z`).getTime();
-  const deadlineTime = new Date(`${comp.registration_deadline}T23:59:59Z`).getTime();
-  const eventTime = new Date(`${comp.event_date}T23:59:59Z`).getTime();
+  const refTime = parseReferenceTimeMs(referenceInput);
+  const deadlineTime = parseDateEndOfDayIST(comp.registration_deadline);
+  const eventTime = parseDateEndOfDayIST(comp.event_date);
 
-  if (!Number.isNaN(deadlineTime) && deadlineTime < refTime) {
-    return 'Registration Closed';
-  }
-  if (!Number.isNaN(eventTime) && eventTime < refTime) {
-    return 'Registration Closed';
-  }
-
-  if (!Number.isNaN(deadlineTime)) {
+  if (deadlineTime !== null) {
+    if (deadlineTime < refTime) {
+      return 'Registration Closed';
+    }
+    if (comp.registration_status === 'Registration Closed') {
+      return 'Registration Closed';
+    }
     const diffDays = Math.ceil((deadlineTime - refTime) / (1000 * 60 * 60 * 24));
-    if (diffDays <= 5) {
+    if (diffDays <= 7) {
       return 'Closing Soon';
+    }
+    if (comp.registration_status === 'Upcoming' && diffDays > 25) {
+      return 'Upcoming';
     }
     return 'Registration Open';
   }
 
-  return comp.registration_status;
+  if (comp.registration_status === 'Registration Closed') {
+    return 'Registration Closed';
+  }
+  if (eventTime !== null && eventTime < refTime) {
+    return 'Registration Closed';
+  }
+
+  return comp.registration_status || 'Registration Open';
+}
+
+function isPastBackendCompetition(
+  comp: BackendCompetition,
+  referenceInput?: string | number | Date
+): boolean {
+  const status = computeAccurateStatus(comp, referenceInput);
+  return status === 'Registration Closed' || status === 'Results Announced';
 }
 
 // 6 Real Verified Karnataka Hackathons (Ordered Chronologically in Sequential Flow)
@@ -559,7 +614,7 @@ async function startServer() {
   hydrateFromSupabaseOnStartup();
 
   // 1. Get all real poster competitions ordered sequentially by event date
-  app.get('/api/competitions', async (_req, res) => {
+  app.get('/api/competitions', async (req, res) => {
     if (supabase) {
       try {
         const { data: dbComps, error } = await supabase
@@ -581,14 +636,38 @@ async function startServer() {
       }
     }
 
+    const refParam =
+      typeof req.query.referenceDate === 'string'
+        ? req.query.referenceDate
+        : undefined;
+
+    const sortByDateAsc = (a: BackendCompetition, b: BackendCompetition) => {
+      const dateA = (a.event_date || a.registration_deadline || '').trim();
+      const dateB = (b.event_date || b.registration_deadline || '').trim();
+      if (!dateA && !dateB) return 0;
+      if (!dateA) return 1;
+      if (!dateB) return -1;
+      return dateA.localeCompare(dateB);
+    };
+
     const enriched = CURATED_COMPETITIONS.map((c) => ({
       ...c,
-      registration_status: computeAccurateStatus(c),
-    })).sort((a, b) => a.event_date.localeCompare(b.event_date));
+      registration_status: computeAccurateStatus(c, refParam),
+    }));
+
+    const activeCompetitions = enriched
+      .filter((c) => !isPastBackendCompetition(c, refParam))
+      .sort(sortByDateAsc);
+
+    const pastCompetitions = enriched
+      .filter((c) => isPastBackendCompetition(c, refParam))
+      .sort(sortByDateAsc);
 
     res.json({
       ok: true,
-      competitions: enriched,
+      competitions: [...activeCompetitions, ...pastCompetitions],
+      activeCompetitions,
+      pastCompetitions,
     });
   });
 
@@ -822,16 +901,21 @@ async function startServer() {
     }
 
     const nowIso = new Date().toISOString();
+    const rawEventDate =
+      typeof body.event_date === 'string' ? body.event_date.trim() : '';
+    const rawDeadline =
+      typeof body.registration_deadline === 'string'
+        ? body.registration_deadline.trim()
+        : '';
+
     const newComp: BackendCompetition = {
       id: `comp-${Date.now()}`,
       title: body.title.trim(),
       college: body.college?.trim() || 'Karnataka Campus Hackathon',
       description: body.description?.trim() || 'Verified student hackathon.',
-      event_date: body.event_date || '2026-11-20',
-      event_date_label:
-        body.event_date_label?.trim() || body.event_date || 'Nov 2026',
-      registration_deadline:
-        body.registration_deadline || body.event_date || '2026-11-18',
+      event_date: rawEventDate,
+      event_date_label: body.event_date_label?.trim() || rawEventDate || '',
+      registration_deadline: rawDeadline,
       location: body.location?.trim() || 'Bengaluru',
       mode: body.mode || 'Offline',
       prize: body.prize?.trim() ? body.prize.trim() : null,
@@ -852,16 +936,133 @@ async function startServer() {
       updated_at: nowIso,
     };
 
-    newComp.registration_status = computeAccurateStatus(newComp);
+    const resolvedStatus = computeAccurateStatus(newComp);
     CURATED_COMPETITIONS.push(newComp);
 
     await syncAllHackathonsToSupabase();
 
     return res.status(201).json({
       ok: true,
-      competition: newComp,
+      competition: {
+        ...newComp,
+        registration_status: resolvedStatus,
+      },
     });
   });
+
+  // 3b. Protected Admin: Update competition deadline or registration status
+  const handleUpdateCompetition: express.RequestHandler = async (req, res) => {
+    if (!isAdminAuthorized(req)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Unauthorized. Valid admin passcode required.',
+      });
+    }
+
+    const { id } = req.params;
+    const idx = CURATED_COMPETITIONS.findIndex((c) => c.id === id);
+    if (idx === -1) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Competition not found.',
+      });
+    }
+
+    const current = CURATED_COMPETITIONS[idx];
+    const body = req.body as Partial<BackendCompetition> & {
+      clear_status_override?: boolean;
+    };
+
+    const updated: BackendCompetition = {
+      ...current,
+      ...(body.title !== undefined ? { title: body.title.trim() } : {}),
+      ...(body.college !== undefined ? { college: body.college.trim() } : {}),
+      ...(body.description !== undefined
+        ? { description: body.description.trim() }
+        : {}),
+      ...(body.event_date !== undefined
+        ? { event_date: body.event_date ? body.event_date.trim() : '' }
+        : {}),
+      ...(body.event_date_label !== undefined
+        ? { event_date_label: body.event_date_label.trim() }
+        : {}),
+      ...(body.registration_deadline !== undefined
+        ? {
+            registration_deadline: body.registration_deadline
+              ? body.registration_deadline.trim()
+              : '',
+          }
+        : {}),
+      ...(body.location !== undefined ? { location: body.location.trim() } : {}),
+      ...(body.mode !== undefined ? { mode: body.mode } : {}),
+      ...(body.prize !== undefined ? { prize: body.prize } : {}),
+      ...(body.team_size !== undefined ? { team_size: body.team_size } : {}),
+      ...(body.category !== undefined ? { category: body.category } : {}),
+      ...(body.registration_url !== undefined
+        ? { registration_url: body.registration_url.trim() }
+        : {}),
+      ...(body.brochure_url !== undefined
+        ? { brochure_url: body.brochure_url }
+        : {}),
+      ...(body.image_url !== undefined ? { image_url: body.image_url } : {}),
+      ...(body.secondary_image_url !== undefined
+        ? { secondary_image_url: body.secondary_image_url }
+        : {}),
+      ...(body.source_url !== undefined
+        ? { source_url: body.source_url.trim() }
+        : {}),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (body.clear_status_override) {
+      updated.status_override = null;
+      if (
+        updated.registration_status === 'Registration Closed' ||
+        updated.registration_status === 'Results Announced'
+      ) {
+        updated.registration_status = 'Registration Open';
+      }
+    } else if (body.status_override !== undefined) {
+      updated.status_override = body.status_override;
+      if (body.status_override) {
+        updated.registration_status = body.status_override;
+      } else if (
+        updated.registration_status === 'Registration Closed' ||
+        updated.registration_status === 'Results Announced'
+      ) {
+        updated.registration_status = 'Registration Open';
+      }
+    } else if (body.registration_status !== undefined) {
+      updated.registration_status = body.registration_status;
+      updated.status_override = body.registration_status;
+    } else if (body.registration_deadline !== undefined) {
+      // When deadline is updated to a future date, clear any stale closed status so the new deadline applies
+      const newCutoff = parseDateEndOfDayIST(updated.registration_deadline);
+      if (newCutoff !== null && newCutoff >= Date.now()) {
+        if (updated.status_override === 'Registration Closed') {
+          updated.status_override = null;
+        }
+        if (updated.registration_status === 'Registration Closed') {
+          updated.registration_status = 'Registration Open';
+        }
+      }
+    }
+
+    CURATED_COMPETITIONS[idx] = updated;
+    await syncAllHackathonsToSupabase();
+
+    const resolvedStatus = computeAccurateStatus(updated);
+    return res.json({
+      ok: true,
+      competition: {
+        ...updated,
+        registration_status: resolvedStatus,
+      },
+    });
+  };
+
+  app.patch('/api/competitions/:id', handleUpdateCompetition);
+  app.put('/api/competitions/:id', handleUpdateCompetition);
 
   // 4. Protected Admin: Delete a competition
   app.delete('/api/competitions/:id', async (req, res) => {

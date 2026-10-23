@@ -98,43 +98,87 @@ export function trackGA4Event(
 }
 
 /**
+ * Parses a YYYY-MM-DD date string as end-of-day (23:59:59.999) in India Standard Time (+05:30),
+ * or parses a full ISO datetime string directly. Returns null if empty or invalid.
+ */
+export function parseDateEndOfDayIST(dateStr?: string | null): number | null {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const trimmed = dateStr.trim();
+  if (!trimmed) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const ms = new Date(`${trimmed}T23:59:59.999+05:30`).getTime();
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  const ms = new Date(trimmed).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Normalizes a reference time (Date, timestamp, YYYY-MM-DD string, or ISO string) into milliseconds.
+ * When omitted, uses the live current timestamp (Date.now()).
+ */
+export function parseReferenceTimeMs(
+  referenceInput?: string | number | Date
+): number {
+  if (referenceInput === undefined || referenceInput === null) {
+    return Date.now();
+  }
+  if (typeof referenceInput === 'number') {
+    return referenceInput;
+  }
+  if (referenceInput instanceof Date) {
+    return referenceInput.getTime();
+  }
+  const trimmed = referenceInput.trim();
+  if (!trimmed) {
+    return Date.now();
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const ms = new Date(`${trimmed}T00:00:00.000+05:30`).getTime();
+    return Number.isNaN(ms) ? Date.now() : ms;
+  }
+  const ms = new Date(trimmed).getTime();
+  return Number.isNaN(ms) ? Date.now() : ms;
+}
+
+/**
  * Computes accurate public-facing competition status from stored dates and admin override.
- * Section 5 Rules:
- * - Never return "Created".
+ * Rules:
  * - Allowed: 'Upcoming' | 'Registration Open' | 'Closing Soon' | 'Registration Closed' | 'Results Announced'
- * - Never mark an event as open simply because its event_date is in the future if registration_deadline has passed.
+ * - Once registration_deadline has passed, status is 'Registration Closed' (unless Results Announced or overridden).
+ * - If registration_deadline is missing, uses existing registration_status and available event_date without inventing dates.
  */
 export function resolveCompetitionStatus(
   comp: Pick<
     CuratedCompetition,
     'event_date' | 'registration_deadline' | 'registration_status' | 'status_override'
   >,
-  referenceDateStr = '2026-10-20'
+  referenceInput?: string | number | Date
 ): PublicCompetitionStatus {
-  // 1. Respect explicit admin override when set (e.g., 'Results Announced' or 'Registration Closed')
+  // 1. Respect explicit admin override when set
   if (comp.status_override) {
     return comp.status_override;
   }
+
+  // 2. Preserve Results Announced status
   if (comp.registration_status === 'Results Announced') {
     return 'Results Announced';
   }
 
-  const refTime = new Date(`${referenceDateStr}T00:00:00Z`).getTime();
-  const deadlineTime = new Date(`${comp.registration_deadline}T23:59:59Z`).getTime();
-  const eventTime = new Date(`${comp.event_date}T23:59:59Z`).getTime();
+  const refTime = parseReferenceTimeMs(referenceInput);
+  const deadlineTime = parseDateEndOfDayIST(comp.registration_deadline);
+  const eventTime = parseDateEndOfDayIST(comp.event_date);
 
-  // 2. If registration deadline has passed, registration is closed—even if event_date is in the future!
-  if (!Number.isNaN(deadlineTime) && deadlineTime < refTime) {
-    return 'Registration Closed';
-  }
-
-  // 3. If the event itself has already passed, registration is closed
-  if (!Number.isNaN(eventTime) && eventTime < refTime) {
-    return 'Registration Closed';
-  }
-
-  // 4. Check days remaining until registration deadline
-  if (!Number.isNaN(deadlineTime)) {
+  // 3. When registration_deadline is present:
+  if (deadlineTime !== null) {
+    if (deadlineTime < refTime) {
+      return 'Registration Closed';
+    }
+    if (comp.registration_status === 'Registration Closed') {
+      return 'Registration Closed';
+    }
     const diffDays = Math.ceil((deadlineTime - refTime) / (1000 * 60 * 60 * 24));
     if (diffDays <= 7) {
       return 'Closing Soon';
@@ -145,22 +189,108 @@ export function resolveCompetitionStatus(
     return 'Registration Open';
   }
 
+  // 4. When registration_deadline is missing/empty:
+  // Use existing registration_status and available event_date without inventing missing dates.
+  if (comp.registration_status === 'Registration Closed') {
+    return 'Registration Closed';
+  }
+
+  if (eventTime !== null && eventTime < refTime) {
+    return 'Registration Closed';
+  }
+
   return comp.registration_status || 'Registration Open';
+}
+
+/**
+ * Returns true if the competition belongs in the Past Competitions section
+ * (registration has closed or results have been announced).
+ */
+export function isPastCompetition(
+  comp: Pick<
+    CuratedCompetition,
+    'event_date' | 'registration_deadline' | 'registration_status' | 'status_override'
+  >,
+  referenceInput?: string | number | Date
+): boolean {
+  const status = resolveCompetitionStatus(comp, referenceInput);
+  return status === 'Registration Closed' || status === 'Results Announced';
+}
+
+/**
+ * Splits competitions into mutually exclusive activeCompetitions and pastCompetitions arrays,
+ * preserving all competition fields and resolving each competition's accurate registration_status.
+ */
+export function categorizeCompetitions<
+  T extends Pick<
+    CuratedCompetition,
+    | 'id'
+    | 'event_date'
+    | 'registration_deadline'
+    | 'registration_status'
+    | 'status_override'
+  >
+>(
+  competitions: T[],
+  referenceInput?: string | number | Date
+): {
+  allCompetitions: T[];
+  activeCompetitions: T[];
+  pastCompetitions: T[];
+} {
+  const seenIds = new Set<string>();
+  const allCompetitions: T[] = [];
+
+  for (const comp of competitions) {
+    if (!comp || seenIds.has(comp.id)) continue;
+    seenIds.add(comp.id);
+    allCompetitions.push({
+      ...comp,
+      registration_status: resolveCompetitionStatus(comp, referenceInput),
+    });
+  }
+
+  const sortByDateAsc = (a: T, b: T) => {
+    const dateA = (a.event_date || a.registration_deadline || '').trim();
+    const dateB = (b.event_date || b.registration_deadline || '').trim();
+    if (!dateA && !dateB) return 0;
+    if (!dateA) return 1;
+    if (!dateB) return -1;
+    return dateA.localeCompare(dateB);
+  };
+
+  const activeCompetitions = allCompetitions
+    .filter((c) => !isPastCompetition(c, referenceInput))
+    .sort(sortByDateAsc);
+
+  const pastCompetitions = allCompetitions
+    .filter((c) => isPastCompetition(c, referenceInput))
+    .sort(sortByDateAsc);
+
+  return {
+    allCompetitions: [...activeCompetitions, ...pastCompetitions],
+    activeCompetitions,
+    pastCompetitions,
+  };
 }
 
 export function getDaysUntilDate(
   isoDateStr: string,
-  referenceDateStr = '2026-10-20'
+  referenceInput?: string | number | Date
 ): number {
-  const refTime = new Date(`${referenceDateStr}T00:00:00Z`).getTime();
-  const targetTime = new Date(`${isoDateStr}T00:00:00Z`).getTime();
-  if (Number.isNaN(targetTime)) return 0;
-  return Math.round((targetTime - refTime) / (1000 * 60 * 60 * 24));
+  if (!isoDateStr || !isoDateStr.trim()) return 0;
+  const refTime = parseReferenceTimeMs(referenceInput);
+  const targetTime = parseDateEndOfDayIST(isoDateStr);
+  if (targetTime === null) return 0;
+  return Math.ceil((targetTime - refTime) / (1000 * 60 * 60 * 24));
 }
 
 export function formatReadableDate(isoDateStr: string): string {
-  if (!isoDateStr) return 'Not announced';
-  const parsed = new Date(`${isoDateStr}T00:00:00Z`);
+  if (!isoDateStr || !isoDateStr.trim()) return 'Not announced';
+  const trimmed = isoDateStr.trim();
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? new Date(`${trimmed}T00:00:00Z`)
+    : new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) {
     return isoDateStr;
   }

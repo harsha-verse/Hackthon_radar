@@ -27,10 +27,12 @@ import {
   YearOfStudy,
 } from './types/v1';
 import {
+  categorizeCompetitions,
   formatReadableDate,
   getDaysUntilDate,
   initGA4IfConfigured,
-  resolveCompetitionStatus,
+  isPastCompetition,
+  parseDateEndOfDayIST,
   trackGA4Event,
 } from './lib/analytics';
 
@@ -288,14 +290,15 @@ export function App() {
   const [qrScanFeedback, setQrScanFeedback] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState('');
   const [newCollege, setNewCollege] = useState('');
-  const [newEventDate, setNewEventDate] = useState('2026-11-20');
+  const [newEventDate, setNewEventDate] = useState('');
   const [newEventDateLabel, setNewEventDateLabel] = useState('');
-  const [newDeadline, setNewDeadline] = useState('2026-11-18');
+  const [newDeadline, setNewDeadline] = useState('');
   const [newLocation, setNewLocation] = useState('');
   const [newMode, setNewMode] = useState<CompetitionMode>('Offline');
   const [newPrize, setNewPrize] = useState('');
   const [newTeamSize, setNewTeamSize] = useState('2 – 4 Members');
   const [newRegUrl, setNewRegUrl] = useState('');
+  const [currentTimeMs, setCurrentTimeMs] = useState<number>(() => Date.now());
 
   useEffect(() => {
     initGA4IfConfigured();
@@ -312,6 +315,13 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const interval = window.setInterval(() => {
+      setCurrentTimeMs(Date.now());
+    }, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     if (student) {
       trackGA4Event(
         'competition_list_viewed',
@@ -321,15 +331,15 @@ export function App() {
     }
   }, [student, competitions.length]);
 
-  // Sort strictly in sequential chronological order
-  const orderedCompetitions = useMemo(() => {
-    return [...competitions]
-      .map((c) => ({
-        ...c,
-        registration_status: resolveCompetitionStatus(c, '2026-10-21'),
-      }))
-      .sort((a, b) => a.event_date.localeCompare(b.event_date));
-  }, [competitions]);
+  // Automatically categorize competitions into mutually exclusive Active and Past sections
+  const {
+    allCompetitions: orderedCompetitions,
+    activeCompetitions,
+    pastCompetitions,
+  } = useMemo(
+    () => categorizeCompetitions(competitions, currentTimeMs),
+    [competitions, currentTimeMs]
+  );
 
   function handleInputInteraction() {
     if (!hasStartedTyping) {
@@ -554,6 +564,8 @@ export function App() {
     const finalCollege =
       newCollege.trim() || newLocation.trim() || 'Karnataka Campus Hackathon';
     const finalLocation = newLocation.trim() || finalCollege;
+    const cleanEventDate = newEventDate.trim();
+    const cleanDeadline = newDeadline.trim();
 
     try {
       const res = await fetch('/api/competitions', {
@@ -565,10 +577,11 @@ export function App() {
         body: JSON.stringify({
           title: newTitle.trim(),
           college: finalCollege,
-          event_date: newEventDate,
+          event_date: cleanEventDate,
           event_date_label:
-            newEventDateLabel.trim() || formatReadableDate(newEventDate),
-          registration_deadline: newDeadline || newEventDate,
+            newEventDateLabel.trim() ||
+            (cleanEventDate ? formatReadableDate(cleanEventDate) : ''),
+          registration_deadline: cleanDeadline,
           location: finalLocation,
           mode: newMode,
           prize: newPrize.trim() || null,
@@ -586,6 +599,9 @@ export function App() {
       setCompetitions((prev) => [...prev, data.competition]);
       setNewTitle('');
       setNewCollege('');
+      setNewEventDate('');
+      setNewEventDateLabel('');
+      setNewDeadline('');
       setNewLocation('');
       setNewPrize('');
       setNewRegUrl('');
@@ -597,6 +613,76 @@ export function App() {
     } catch {
       setAdminStatusMsg('Network error while adding hackathon.');
     }
+  }
+
+  async function handleAdminUpdateCompetition(
+    id: string,
+    updates: {
+      registration_deadline?: string;
+      status_override?: PublicCompetitionStatus | null;
+      registration_status?: PublicCompetitionStatus;
+      clear_status_override?: boolean;
+    }
+  ) {
+    try {
+      const res = await fetch(`/api/competitions/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-passcode': adminPasscode.trim(),
+        },
+        body: JSON.stringify(updates),
+      });
+      const data = await res.json();
+      if (res.ok && data?.ok && data.competition) {
+        setCompetitions((prev) =>
+          prev.map((c) => (c.id === id ? data.competition : c))
+        );
+        setCurrentTimeMs(Date.now());
+        setAdminStatusMsg('Competition updated — section placement refreshed.');
+        return;
+      }
+    } catch {
+      // Fallback to local state update
+    }
+
+    setCompetitions((prev) =>
+      prev.map((c) => {
+        if (c.id !== id) return c;
+        const next: CuratedCompetition = { ...c };
+        if (updates.registration_deadline !== undefined) {
+          next.registration_deadline = updates.registration_deadline;
+          const cutoff = parseDateEndOfDayIST(updates.registration_deadline);
+          if (cutoff !== null && cutoff >= Date.now()) {
+            if (next.status_override === 'Registration Closed') {
+              next.status_override = null;
+            }
+            if (next.registration_status === 'Registration Closed') {
+              next.registration_status = 'Registration Open';
+            }
+          }
+        }
+        if (updates.clear_status_override) {
+          next.status_override = null;
+          if (
+            next.registration_status === 'Registration Closed' ||
+            next.registration_status === 'Results Announced'
+          ) {
+            next.registration_status = 'Registration Open';
+          }
+        } else if (updates.status_override !== undefined) {
+          next.status_override = updates.status_override;
+          if (updates.status_override) {
+            next.registration_status = updates.status_override;
+          }
+        } else if (updates.registration_status !== undefined) {
+          next.registration_status = updates.registration_status;
+          next.status_override = updates.registration_status;
+        }
+        return next;
+      })
+    );
+    setCurrentTimeMs(Date.now());
   }
 
   async function handleAdminDeleteCompetition(id: string) {
@@ -611,6 +697,201 @@ export function App() {
     } catch {
       // Ignore
     }
+  }
+
+  function renderCompetitionCard(comp: CuratedCompetition, index: number) {
+    const seqNumber = String(index + 1).padStart(2, '0');
+    const isPast = isPastCompetition(comp, currentTimeMs);
+    const daysLeft = getDaysUntilDate(comp.event_date, currentTimeMs);
+
+    return (
+      <article
+        key={comp.id}
+        className="group bg-[#121216] border border-zinc-800/90 hover:border-indigo-500/50 rounded-2xl overflow-hidden transition-all shadow-lg"
+      >
+        <div className="flex flex-col sm:flex-row">
+          {/* Left: Real Hackathon Poster Thumbnail (Click to open full poster) */}
+          <div
+            onClick={() => {
+              setActivePosterComp(comp);
+              trackGA4Event('competition_clicked', {
+                competition_id: comp.id,
+                competition_title: comp.title,
+              });
+            }}
+            className="relative sm:w-56 md:w-64 h-64 sm:h-auto bg-zinc-950 shrink-0 cursor-pointer overflow-hidden border-b sm:border-b-0 sm:border-r border-zinc-800/80"
+          >
+            {comp.image_url ? (
+              <img
+                src={comp.image_url}
+                alt={comp.title}
+                className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 p-4 text-center">
+                <ImageIcon className="w-8 h-8 mb-2 opacity-50" />
+                <span className="text-xs">{comp.title}</span>
+              </div>
+            )}
+
+            {/* Sequential Number Badge (#01, #02...) */}
+            <div className="absolute top-3 left-3 h-8 px-2.5 rounded-lg bg-black/80 backdrop-blur-md border border-white/15 flex items-center gap-1.5 text-xs font-mono font-bold text-white">
+              <span className="text-indigo-400">#{seqNumber}</span>
+            </div>
+
+            {/* Tap to Zoom Overlay Pill */}
+            <div className="absolute bottom-3 right-3 px-2.5 py-1 rounded-lg bg-black/80 backdrop-blur-md border border-white/15 flex items-center gap-1 text-[11px] font-medium text-zinc-200">
+              <ZoomIn className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Full Poster</span>
+            </div>
+          </div>
+
+          {/* Right: Essential Scannable Info + Direct QR Action */}
+          <div className="flex-1 p-5 sm:p-6 flex flex-col justify-between">
+            <div>
+              {/* Top Row: Status + College Name */}
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <span className="text-xs font-medium text-indigo-400">
+                  {comp.college}
+                </span>
+                <StatusDot status={comp.registration_status} />
+              </div>
+
+              {/* Event Title */}
+              <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+                {comp.title}
+              </h2>
+
+              {/* Key Facts Grid — Google Pay Style Visual Clarity */}
+              <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                {/* Event Date */}
+                <div className="p-2.5 rounded-xl bg-zinc-900/90 border border-zinc-800/80">
+                  <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                    <CalendarIcon className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    <span>Event Date</span>
+                  </div>
+                  <p className="text-xs sm:text-sm font-semibold text-white mt-0.5 truncate">
+                    {comp.event_date_label || formatReadableDate(comp.event_date)}
+                  </p>
+                </div>
+
+                {/* Prize Money */}
+                <div className="p-2.5 rounded-xl bg-zinc-900/90 border border-zinc-800/80">
+                  <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                    <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Prize Pool</span>
+                  </div>
+                  <p className="text-xs sm:text-sm font-semibold text-amber-300 mt-0.5 truncate">
+                    {comp.prize || 'See Poster'}
+                  </p>
+                </div>
+
+                {/* Team Size / Fee */}
+                <div className="col-span-2 sm:col-span-1 p-2.5 rounded-xl bg-zinc-900/90 border border-zinc-800/80">
+                  <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                    <Users className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>Team Size</span>
+                  </div>
+                  <p className="text-xs sm:text-sm font-semibold text-white mt-0.5 truncate">
+                    {comp.team_size || '2 – 4 Members'}
+                    {comp.entry_fee && comp.entry_fee !== 'See Official Page'
+                      ? ` · ${comp.entry_fee}`
+                      : ''}
+                  </p>
+                </div>
+              </div>
+
+              {/* Perks Chip (e.g. Papa John's Pizza, Free Shuttle) */}
+              {comp.perks && (
+                <div className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/60 text-xs text-emerald-300 font-medium">
+                  <span>✨ {comp.perks}</span>
+                </div>
+              )}
+
+              {/* Location & Coordinator Line */}
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400">
+                <span className="inline-flex items-center gap-1 text-zinc-300">
+                  <MapPin className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                  {comp.location}
+                </span>
+                {!isPast && daysLeft > 0 && (
+                  <span className="text-indigo-400 font-medium">
+                    • In {daysLeft} {daysLeft === 1 ? 'day' : 'days'}
+                  </span>
+                )}
+                {comp.coordinators && (
+                  <span className="text-zinc-500 truncate">
+                    · Contact: {comp.coordinators}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Action Bar: Direct QR Link + View Poster + Brochure */}
+            <div className="mt-5 pt-4 border-t border-zinc-800/80 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActivePosterComp(comp);
+                    setLightboxTab('poster');
+                  }}
+                  className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-medium text-zinc-200 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <ZoomIn className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>View Poster</span>
+                </button>
+
+                {comp.brochure_url && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActivePosterComp(comp);
+                      setLightboxTab('brochure');
+                    }}
+                    className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-emerald-900/60 text-xs font-medium text-emerald-300 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Event Brochure</span>
+                  </button>
+                )}
+
+                {comp.secondary_image_url && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActivePosterComp(comp);
+                      setLightboxTab('roadmap');
+                    }}
+                    className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-amber-900/50 text-xs font-medium text-amber-300 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Training Roadmap</span>
+                  </button>
+                )}
+              </div>
+
+              <a
+                href={comp.registration_url || comp.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() =>
+                  trackGA4Event('registration_clicked', {
+                    competition_id: comp.id,
+                    competition_title: comp.title,
+                    destination_url: comp.registration_url || comp.source_url,
+                  })
+                }
+                className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 shadow-md shadow-indigo-600/20 transition-all"
+              >
+                <span>Register Now</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          </div>
+        </div>
+      </article>
+    );
   }
 
   // ============================================================================
@@ -831,6 +1112,7 @@ export function App() {
             setNewRegUrl={setNewRegUrl}
             handleAdminCreateCompetition={handleAdminCreateCompetition}
             competitions={orderedCompetitions}
+            handleAdminUpdateCompetition={handleAdminUpdateCompetition}
             handleAdminDeleteCompetition={handleAdminDeleteCompetition}
             onClose={() => setShowAdminModal(false)}
           />
@@ -898,14 +1180,18 @@ export function App() {
 
       {/* Main Sequential List — Clean, Visual, Zero Clutter */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
-        {/* Compact Top Banner */}
+        {/* Compact Top Banner — Active / Upcoming Competitions */}
         <div className="mb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-3 pb-5 border-b border-zinc-800/80">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
               Karnataka Official Campus Feed
             </p>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1">
-              Upcoming Hackathons (1 → {orderedCompetitions.length})
+              Upcoming Hackathons (
+              {activeCompetitions.length > 0
+                ? `1 → ${activeCompetitions.length}`
+                : '0'}
+              )
             </h1>
           </div>
           <p className="text-xs text-zinc-400">
@@ -913,202 +1199,44 @@ export function App() {
           </p>
         </div>
 
-        {/* Sequential Event Cards */}
+        {/* Sequential Active Event Cards */}
         <div className="space-y-5">
-          {orderedCompetitions.map((comp, index) => {
-            const seqNumber = String(index + 1).padStart(2, '0');
-            const daysLeft = getDaysUntilDate(comp.event_date, '2026-10-21');
-
-            return (
-              <article
-                key={comp.id}
-                className="group bg-[#121216] border border-zinc-800/90 hover:border-indigo-500/50 rounded-2xl overflow-hidden transition-all shadow-lg"
-              >
-                <div className="flex flex-col sm:flex-row">
-                  {/* Left: Real Hackathon Poster Thumbnail (Click to open full poster) */}
-                  <div
-                    onClick={() => {
-                      setActivePosterComp(comp);
-                      trackGA4Event('competition_clicked', {
-                        competition_id: comp.id,
-                        competition_title: comp.title,
-                      });
-                    }}
-                    className="relative sm:w-56 md:w-64 h-64 sm:h-auto bg-zinc-950 shrink-0 cursor-pointer overflow-hidden border-b sm:border-b-0 sm:border-r border-zinc-800/80"
-                  >
-                    {comp.image_url ? (
-                      <img
-                        src={comp.image_url}
-                        alt={comp.title}
-                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 p-4 text-center">
-                        <ImageIcon className="w-8 h-8 mb-2 opacity-50" />
-                        <span className="text-xs">{comp.title}</span>
-                      </div>
-                    )}
-
-                    {/* Sequential Number Badge (#01, #02...) */}
-                    <div className="absolute top-3 left-3 h-8 px-2.5 rounded-lg bg-black/80 backdrop-blur-md border border-white/15 flex items-center gap-1.5 text-xs font-mono font-bold text-white">
-                      <span className="text-indigo-400">#{seqNumber}</span>
-                    </div>
-
-                    {/* Tap to Zoom Overlay Pill */}
-                    <div className="absolute bottom-3 right-3 px-2.5 py-1 rounded-lg bg-black/80 backdrop-blur-md border border-white/15 flex items-center gap-1 text-[11px] font-medium text-zinc-200">
-                      <ZoomIn className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>Full Poster</span>
-                    </div>
-                  </div>
-
-                  {/* Right: Essential Scannable Info + Direct QR Action */}
-                  <div className="flex-1 p-5 sm:p-6 flex flex-col justify-between">
-                    <div>
-                      {/* Top Row: Status + College Name */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                        <span className="text-xs font-medium text-indigo-400">
-                          {comp.college}
-                        </span>
-                        <StatusDot status={comp.registration_status} />
-                      </div>
-
-                      {/* Event Title */}
-                      <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
-                        {comp.title}
-                      </h2>
-
-                      {/* Key Facts Grid — Google Pay Style Visual Clarity */}
-                      <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                        {/* Event Date */}
-                        <div className="p-2.5 rounded-xl bg-zinc-900/90 border border-zinc-800/80">
-                          <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
-                            <CalendarIcon className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                            <span>Event Date</span>
-                          </div>
-                          <p className="text-xs sm:text-sm font-semibold text-white mt-0.5 truncate">
-                            {comp.event_date_label || formatReadableDate(comp.event_date)}
-                          </p>
-                        </div>
-
-                        {/* Prize Money */}
-                        <div className="p-2.5 rounded-xl bg-zinc-900/90 border border-zinc-800/80">
-                          <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
-                            <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                            <span>Prize Pool</span>
-                          </div>
-                          <p className="text-xs sm:text-sm font-semibold text-amber-300 mt-0.5 truncate">
-                            {comp.prize || 'See Poster'}
-                          </p>
-                        </div>
-
-                        {/* Team Size / Fee */}
-                        <div className="col-span-2 sm:col-span-1 p-2.5 rounded-xl bg-zinc-900/90 border border-zinc-800/80">
-                          <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
-                            <Users className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                            <span>Team Size</span>
-                          </div>
-                          <p className="text-xs sm:text-sm font-semibold text-white mt-0.5 truncate">
-                            {comp.team_size || '2 – 4 Members'}
-                            {comp.entry_fee && comp.entry_fee !== 'See Official Page'
-                              ? ` · ${comp.entry_fee}`
-                              : ''}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Perks Chip (e.g. Papa John's Pizza, Free Shuttle) */}
-                      {comp.perks && (
-                        <div className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/60 text-xs text-emerald-300 font-medium">
-                          <span>✨ {comp.perks}</span>
-                        </div>
-                      )}
-
-                      {/* Location & Coordinator Line */}
-                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400">
-                        <span className="inline-flex items-center gap-1 text-zinc-300">
-                          <MapPin className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                          {comp.location}
-                        </span>
-                        {daysLeft > 0 && (
-                          <span className="text-indigo-400 font-medium">
-                            • In {daysLeft} {daysLeft === 1 ? 'day' : 'days'}
-                          </span>
-                        )}
-                        {comp.coordinators && (
-                          <span className="text-zinc-500 truncate">
-                            · Contact: {comp.coordinators}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Action Bar: Direct QR Link + View Poster + Brochure */}
-                    <div className="mt-5 pt-4 border-t border-zinc-800/80 flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActivePosterComp(comp);
-                            setLightboxTab('poster');
-                          }}
-                          className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-medium text-zinc-200 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
-                        >
-                          <ZoomIn className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>View Poster</span>
-                        </button>
-
-                        {comp.brochure_url && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActivePosterComp(comp);
-                              setLightboxTab('brochure');
-                            }}
-                            className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-emerald-900/60 text-xs font-medium text-emerald-300 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
-                          >
-                            <FileText className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Event Brochure</span>
-                          </button>
-                        )}
-
-                        {comp.secondary_image_url && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActivePosterComp(comp);
-                              setLightboxTab('roadmap');
-                            }}
-                            className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-amber-900/50 text-xs font-medium text-amber-300 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
-                          >
-                            <FileText className="w-3.5 h-3.5 text-amber-400" />
-                            <span>Training Roadmap</span>
-                          </button>
-                        )}
-                      </div>
-
-                      <a
-                        href={comp.registration_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() =>
-                          trackGA4Event('registration_clicked', {
-                            competition_id: comp.id,
-                            competition_title: comp.title,
-                            destination_url: comp.registration_url,
-                          })
-                        }
-                        className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 shadow-md shadow-indigo-600/20 transition-all"
-                      >
-                        <span>Register Now</span>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
+          {activeCompetitions.map((comp, index) =>
+            renderCompetitionCard(comp, index)
+          )}
         </div>
+
+        {/* Past Competitions Section (Competitions whose registration has closed) */}
+        {pastCompetitions.length > 0 && (
+          <section
+            id="past-competitions"
+            aria-labelledby="past-competitions-heading"
+            className="mt-12 pt-8 border-t border-zinc-800/80"
+          >
+            <div className="mb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-3 pb-5 border-b border-zinc-800/80">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                  Registration Closed · Archive
+                </p>
+                <h2
+                  id="past-competitions-heading"
+                  className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1"
+                >
+                  Past Competitions (1 → {pastCompetitions.length})
+                </h2>
+              </div>
+              <p className="text-xs text-zinc-400">
+                Previous competitions whose registration has closed · Posters, brochures & official links remain accessible
+              </p>
+            </div>
+
+            <div className="space-y-5">
+              {pastCompetitions.map((comp, index) =>
+                renderCompetitionCard(comp, index)
+              )}
+            </div>
+          </section>
+        )}
       </main>
 
       {/* Full-Screen Poster & Brochure Lightbox Modal */}
@@ -1298,6 +1426,7 @@ export function App() {
           setNewRegUrl={setNewRegUrl}
           handleAdminCreateCompetition={handleAdminCreateCompetition}
           competitions={orderedCompetitions}
+          handleAdminUpdateCompetition={handleAdminUpdateCompetition}
           handleAdminDeleteCompetition={handleAdminDeleteCompetition}
           onClose={() => setShowAdminModal(false)}
         />
@@ -1346,6 +1475,15 @@ interface AdminModalProps {
   setNewRegUrl: (v: string) => void;
   handleAdminCreateCompetition: (e: React.FormEvent) => void;
   competitions: CuratedCompetition[];
+  handleAdminUpdateCompetition: (
+    id: string,
+    updates: {
+      registration_deadline?: string;
+      status_override?: PublicCompetitionStatus | null;
+      registration_status?: PublicCompetitionStatus;
+      clear_status_override?: boolean;
+    }
+  ) => void;
   handleAdminDeleteCompetition: (id: string) => void;
   onClose: () => void;
 }
@@ -1434,6 +1572,7 @@ function AdminModal({
   setNewRegUrl,
   handleAdminCreateCompetition,
   competitions,
+  handleAdminUpdateCompetition,
   handleAdminDeleteCompetition,
   onClose,
 }: AdminModalProps) {
@@ -1882,7 +2021,7 @@ function AdminModal({
                     </button>
                   </form>
 
-                  {/* Manage existing events */}
+                  {/* Manage existing events (update deadline, status, or remove) */}
                   <div className="pt-3 border-t border-zinc-800 space-y-2">
                     <p className="text-xs font-semibold text-zinc-400">
                       Current Sequential Events ({competitions.length})
@@ -1890,7 +2029,7 @@ function AdminModal({
                     {competitions.map((c, idx) => (
                       <div
                         key={c.id}
-                        className="flex items-center justify-between p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800 text-xs"
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800 text-xs"
                       >
                         <div className="truncate pr-2">
                           <span className="font-mono text-indigo-400 mr-2">
@@ -1898,17 +2037,55 @@ function AdminModal({
                           </span>
                           <span className="font-medium text-white">{c.title}</span>
                           <span className="text-zinc-500 ml-2 font-mono">
-                            ({c.registration_url})
+                            ({c.registration_status})
                           </span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleAdminDeleteCompetition(c.id)}
-                          className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-950/50 cursor-pointer"
-                          title="Remove Event"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <input
+                            type="date"
+                            value={c.registration_deadline || ''}
+                            onChange={(e) =>
+                              handleAdminUpdateCompetition(c.id, {
+                                registration_deadline: e.target.value,
+                              })
+                            }
+                            title="Registration Deadline"
+                            className="px-2 py-1 rounded-lg bg-[#09090B] border border-zinc-800 text-[11px] text-zinc-200"
+                          />
+                          <select
+                            value={c.status_override || 'AUTO'}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === 'AUTO') {
+                                handleAdminUpdateCompetition(c.id, {
+                                  clear_status_override: true,
+                                });
+                              } else {
+                                handleAdminUpdateCompetition(c.id, {
+                                  status_override: val as PublicCompetitionStatus,
+                                  registration_status: val as PublicCompetitionStatus,
+                                });
+                              }
+                            }}
+                            title="Registration Status"
+                            className="px-2 py-1 rounded-lg bg-[#09090B] border border-zinc-800 text-[11px] text-zinc-200"
+                          >
+                            <option value="AUTO">Auto (By Deadline)</option>
+                            <option value="Upcoming">Upcoming</option>
+                            <option value="Registration Open">Registration Open</option>
+                            <option value="Closing Soon">Closing Soon</option>
+                            <option value="Registration Closed">Registration Closed</option>
+                            <option value="Results Announced">Results Announced</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => handleAdminDeleteCompetition(c.id)}
+                            className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-950/50 cursor-pointer"
+                            title="Remove Event"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
